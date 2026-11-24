@@ -9,39 +9,6 @@ use monocord_core::{
     Channel, ConfigPaths, Installer, detect_all, install::OpKind, running_discord_processes,
 };
 
-/// Renderer bundles embedded at compile time by build.rs.
-static DIST_MAIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/main.js"));
-static DIST_PRELOAD: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/preload.js"));
-static DIST_RENDERER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/renderer.js"));
-
-const DIST_STUB_MARKER: &[u8] = b"// monocord dist missing";
-
-const DIST_FILES: &[(&str, &[u8])] = &[
-    ("main.js", DIST_MAIN),
-    ("preload.js", DIST_PRELOAD),
-    ("renderer.js", DIST_RENDERER),
-];
-
-/// Deploy the embedded framework bundles into the Monocord data dir so the
-/// exe is a self-contained installer. Refuses when the binary was built
-/// without `pnpm build` having produced real bundles.
-fn deploy_dist(paths: &ConfigPaths) -> anyhow::Result<()> {
-    let dist_dir = paths.root.join("dist");
-    std::fs::create_dir_all(&dist_dir)
-        .with_context(|| format!("creating {}", dist_dir.display()))?;
-    for (name, bytes) in DIST_FILES {
-        if bytes.starts_with(DIST_STUB_MARKER) {
-            anyhow::bail!(
-                "installer was built without framework bundles — \
-                 run `pnpm build` then rebuild with `cargo build --release -p monocord`"
-            );
-        }
-        let dest = dist_dir.join(name);
-        std::fs::write(&dest, bytes).with_context(|| format!("writing {}", dest.display()))?;
-    }
-    Ok(())
-}
-
 #[derive(Parser)]
 #[command(
     name = "monocord",
@@ -165,16 +132,11 @@ fn channel_arg(s: &str) -> anyhow::Result<Channel> {
 }
 
 fn find_install(channel: Channel) -> anyhow::Result<monocord_core::DiscordInstall> {
-    detect_all()
-        .into_iter()
-        .find(|i| i.channel == channel)
-        .with_context(|| format!("discord {channel} not detected"))
+    Ok(monocord_core::find_install(channel)?)
 }
 
 fn backup_dir_for(paths: &ConfigPaths, inst: &monocord_core::DiscordInstall) -> PathBuf {
-    paths
-        .backups
-        .join(format!("{}-{}", inst.channel, inst.version))
+    monocord_core::backup_dir_for(paths, inst)
 }
 
 fn cmd_detect() {
@@ -277,83 +239,24 @@ fn cmd_verify(paths: &ConfigPaths, channel: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Path to the built main-process bootstrap inside the Monocord data dir.
-fn bootstrap_path(paths: &ConfigPaths) -> PathBuf {
-    paths.root.join("dist").join("main.js")
-}
-
 fn cmd_install(paths: &ConfigPaths, channel: &str, force: bool) -> anyhow::Result<()> {
-    do_install(paths, channel_arg(channel)?, force)
-}
-
-fn do_install(paths: &ConfigPaths, channel: Channel, force: bool) -> anyhow::Result<()> {
-    let inst = find_install(channel)?;
-
-    // Deploy embedded framework bundles, then patch app.asar.
-    deploy_dist(paths)?;
-
-    // Refuse to clobber a foreign patch unless forced.
-    match monocord_core::patch::inspect(&inst.resources) {
-        monocord_core::PatchState::Foreign { hint } if !force => {
-            anyhow::bail!(
-                "app.asar is owned by another modification ({hint}). \
-                 Uninstall it first, or re-run with --force."
-            );
-        }
-        monocord_core::PatchState::Unreadable { reason } => {
-            anyhow::bail!("cannot inspect app.asar: {reason}");
-        }
-        _ => {}
-    }
-
-    let bootstrap = bootstrap_path(paths);
-    if !bootstrap.is_file() {
-        anyhow::bail!(
-            "Monocord bootstrap not built: {} — run `pnpm build` first",
-            bootstrap.display()
-        );
-    }
-
-    let plan = monocord_core::patch::build_plan(&inst, &bootstrap)?;
-    let installer = Installer::new(inst.version_dir.clone(), backup_dir_for(paths, &inst));
-    if installer.has_journal() {
-        anyhow::bail!("interrupted install detected — run `monocord uninstall` first");
-    }
-    installer.apply(&plan)?;
-
-    // Record install state in config.
-    let mut cfg = monocord_core::config::load(paths)?;
-    let key = channel.to_string();
-    let state = cfg.discord.installs.entry(key).or_default();
-    state.applied_version = Some(env!("CARGO_PKG_VERSION").to_string());
-    state.discord_version = Some(inst.version.clone());
-    monocord_core::config::save(paths, &cfg)?;
-
+    let channel = channel_arg(channel)?;
+    let inst = monocord_core::find_install(channel)?;
+    let backup = monocord_core::install_monocord(paths, channel, force)?;
     println!(
         "installed Monocord {} into {} ({}), backup in {}",
-        env!("CARGO_PKG_VERSION"),
+        monocord_core::ops::FRAMEWORK_VERSION,
         inst.version_dir.display(),
         inst.version,
-        installer.backup_dir.display()
+        backup.display()
     );
     Ok(())
 }
 
 fn cmd_uninstall(paths: &ConfigPaths, channel: &str) -> anyhow::Result<()> {
-    do_uninstall(paths, channel_arg(channel)?)
-}
-
-fn do_uninstall(paths: &ConfigPaths, channel: Channel) -> anyhow::Result<()> {
-    let inst = find_install(channel)?;
-    let installer = Installer::new(inst.version_dir.clone(), backup_dir_for(paths, &inst));
-    installer.restore()?;
-
-    let mut cfg = monocord_core::config::load(paths)?;
-    if let Some(state) = cfg.discord.installs.get_mut(&channel.to_string()) {
-        state.applied_version = None;
-    }
-    monocord_core::config::save(paths, &cfg)?;
-
+    let channel = channel_arg(channel)?;
+    let inst = monocord_core::find_install(channel)?;
+    monocord_core::uninstall_monocord(paths, channel)?;
     println!("uninstalled Monocord from {}", inst.version_dir.display());
     Ok(())
 }
@@ -459,8 +362,13 @@ fn interactive_install(paths: &ConfigPaths) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    do_install(paths, channel, force)?;
-    println!("\ndone — restart discord to load Monocord");
+    monocord_core::install_monocord(paths, channel, force)?;
+    println!("\ninstalled — restarting discord…");
+    let inst = monocord_core::find_install(channel)?;
+    match monocord_core::restart_discord(&inst) {
+        Ok(()) => println!("discord restarted"),
+        Err(e) => println!("install done, but restart failed: {e} — restart discord manually"),
+    }
     Ok(())
 }
 
@@ -473,8 +381,13 @@ fn interactive_uninstall(paths: &ConfigPaths) -> anyhow::Result<()> {
         println!("aborted");
         return Ok(());
     }
-    do_uninstall(paths, channel)?;
-    println!("\ndone — restart discord");
+    monocord_core::uninstall_monocord(paths, channel)?;
+    println!("\nuninstalled — restarting discord…");
+    let inst = monocord_core::find_install(channel)?;
+    match monocord_core::restart_discord(&inst) {
+        Ok(()) => println!("discord restarted"),
+        Err(e) => println!("uninstall done, but restart failed: {e} — restart discord manually"),
+    }
     Ok(())
 }
 

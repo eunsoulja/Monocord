@@ -172,6 +172,59 @@ pub fn running_discord_processes() -> Vec<DiscordProcess> {
         .collect()
 }
 
+/// Kill every running process for a channel's executable name.
+/// Returns the number of processes killed.
+#[must_use]
+pub fn kill_channel_processes(channel: Channel) -> usize {
+    let mut sys = sysinfo::System::new();
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+    let exe = channel.exe_name();
+    let mut killed = 0;
+    for p in sys.processes().values() {
+        if p.name()
+            .to_str()
+            .is_some_and(|n| n.eq_ignore_ascii_case(exe))
+            && p.kill()
+        {
+            killed += 1;
+        }
+    }
+    killed
+}
+
+/// Restart Discord for an install: kill its processes, wait for them to
+/// exit, then relaunch through the Squirrel `Update.exe` shim (the same
+/// entry point Discord's own shortcuts use), falling back to the version
+/// exe directly.
+pub fn restart_discord(inst: &DiscordInstall) -> Result<()> {
+    let _ = kill_channel_processes(inst.channel);
+
+    // Give processes a moment to exit before relaunching.
+    for _ in 0..50 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if running_discord_processes()
+            .iter()
+            .all(|p| !p.name.eq_ignore_ascii_case(inst.channel.exe_name()))
+        {
+            break;
+        }
+    }
+
+    let update_exe = inst.root.join("Update.exe");
+    if update_exe.is_file() {
+        return std::process::Command::new(&update_exe)
+            .args(["--processStart", inst.channel.exe_name()])
+            .current_dir(&inst.root)
+            .spawn()
+            .map(|_| ())
+            .map_err(Error::from);
+    }
+    std::process::Command::new(&inst.exe)
+        .spawn()
+        .map(|_| ())
+        .map_err(Error::from)
+}
+
 /// Pick the newest `app-*` version directory under a channel root.
 fn pick_version_dir(root: &Path) -> Result<PathBuf> {
     let mut candidates: Vec<(Vec<u64>, PathBuf)> = Vec::new();

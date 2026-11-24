@@ -1,0 +1,22 @@
+[package]
+name = "monocord-gui"
+description = "Monocord installer — native GUI frontend for the framework"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "monocord-installer"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+monocord-core = { path = "../monocord-core" }
+eframe = { version = "0.37", default-features = false, features = [
+    "accesskit",
+    "default_fonts",
+    "glow",
+] }
+egui = "0.37"

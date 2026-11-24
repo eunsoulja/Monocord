@@ -1,15 +1,15 @@
-//! Embed the built renderer bundles (`dist/*.js`) into the installer binary.
+//! Embed the built renderer bundles (`dist/*.js`) into dependent binaries.
 //!
-//! Run `pnpm build` before `cargo build --release` so the exe carries the
-//! current framework code. Missing/empty bundles degrade to a stub so the
-//! crate still compiles — `install` then refuses rather than bricking Discord.
+//! Run `pnpm build` before `cargo build` so installers carry the current
+//! framework code. Missing/empty bundles degrade to a stub so the crate
+//! still compiles — install then refuses rather than bricking Discord.
 
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 
 const BUNDLES: [&str; 3] = ["main.js", "preload.js", "renderer.js"];
-const STUB: &[u8] = b"// monocord dist missing - run `pnpm build` before building the installer\n";
+const STUB: &[u8] = b"// monocord dist missing - run `pnpm build` before building\n";
 
 fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
@@ -25,7 +25,7 @@ fn main() {
             }
             _ => {
                 println!(
-                    "cargo:warning=dist/{name} missing or empty — installer will refuse to install until `pnpm build` is run"
+                    "cargo:warning=dist/{name} missing or empty - installers will refuse until `pnpm build` is run"
                 );
                 fs::write(&out_path, STUB).expect("write stub bundle");
             }

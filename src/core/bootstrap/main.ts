@@ -347,8 +347,25 @@ function registerIpc(): void {
     // because webFrame.executeJavaScript lands in the isolated world).
     ipcMain.on("monocord:execute-js", (event, code: string) => {
         try {
-            void event.sender.executeJavaScript(code);
+            const wc = event.sender;
+            void wc
+                .executeJavaScript(code)
+                .catch((e: unknown) => log("renderer eval rejected", e));
             log("renderer executed via webContents.executeJavaScript");
+            // Probe the page a few seconds later: is the bridge visible and
+            // are Discord's webpack chunks on window in this world?
+            setTimeout(() => {
+                wc.executeJavaScript(
+                    `JSON.stringify({` +
+                        `mc: typeof window.monocord !== "undefined",` +
+                        `mcKeys: window.monocord ? Object.keys(window.monocord) : [],` +
+                        `chunks: Object.keys(window).filter(k => k.indexOf("webpackChunk") === 0),` +
+                        `href: location.href` +
+                        `})`,
+                )
+                    .then((r: unknown) => log(`renderer probe: ${String(r)}`))
+                    .catch((e: unknown) => log("renderer probe failed", e));
+            }, 4000);
         } catch (e) {
             log("executeJavaScript failed", e);
         }

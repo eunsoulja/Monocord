@@ -48,6 +48,10 @@ try {
     // webContents.executeJavaScript runs in the page's main world.
     ipcRenderer.send("monocord:execute-js", code);
     plog("execute-js sent to main process");
+    // Verify the renderer→main log IPC path independently of the bundle.
+    void ipcRenderer
+        .invoke("monocord:log", "info", "preload", `preload alive: ${location.href}`)
+        .catch(() => {});
 } catch (e) {
     plog(`inject failed: ${String(e)}`);
     console.error("[Monocord] failed to inject renderer", e);

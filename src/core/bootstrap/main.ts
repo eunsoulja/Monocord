@@ -339,17 +339,28 @@ function registerIpc(): void {
     ipcMain.handle("monocord:plugins-list", () => listPlugins());
     ipcMain.handle("monocord:plugin-get", (_e, name: string) => getPluginCode(name));
 
-    ipcMain.on("monocord:log", (_e, level: string, scope: string, message: string) => {
-        log(`[${level}] ${scope}: ${message}`);
-    });
+    // Renderer logs arrive via ipcRenderer.invoke — must be `handle`, not
+    // `on`, or the renderer's promise never resolves and logs vanish.
+    ipcMain.handle(
+        "monocord:log",
+        (_e, level: string, scope: string, message: string) => {
+            log(`[${level}] ${scope}: ${message}`);
+        },
+    );
 
     // Execute renderer code in the page's main world (preload asks us to
     // because webFrame.executeJavaScript lands in the isolated world).
     ipcMain.on("monocord:execute-js", (event, code: string) => {
         try {
             const wc = event.sender;
+            // Wrap with a boot marker so the probe can tell whether the
+            // bundle evaluated, threw, or never ran.
+            const wrapped =
+                `try{window.__monocord_boot="evaluating";` +
+                code +
+                `window.__monocord_boot="evaluated";}catch(e){window.__monocord_boot="threw:"+e;}`;
             void wc
-                .executeJavaScript(code)
+                .executeJavaScript(wrapped)
                 .catch((e: unknown) => log("renderer eval rejected", e));
             log("renderer executed via webContents.executeJavaScript");
             // Probe the page a few seconds later: is the bridge visible and
@@ -358,7 +369,7 @@ function registerIpc(): void {
                 wc.executeJavaScript(
                     `JSON.stringify({` +
                         `mc: typeof window.monocord !== "undefined",` +
-                        `mcKeys: window.monocord ? Object.keys(window.monocord) : [],` +
+                        `boot: window.__monocord_boot || null,` +
                         `chunks: Object.keys(window).filter(k => k.indexOf("webpackChunk") === 0),` +
                         `href: location.href` +
                         `})`,

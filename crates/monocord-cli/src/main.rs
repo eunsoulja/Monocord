@@ -1,12 +1,46 @@
 //! Monocord CLI — manage the Discord modification framework.
 
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 
 use anyhow::Context;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use monocord_core::{
     Channel, ConfigPaths, Installer, detect_all, install::OpKind, running_discord_processes,
 };
+
+/// Renderer bundles embedded at compile time by build.rs.
+static DIST_MAIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/main.js"));
+static DIST_PRELOAD: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/preload.js"));
+static DIST_RENDERER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/renderer.js"));
+
+const DIST_STUB_MARKER: &[u8] = b"// monocord dist missing";
+
+const DIST_FILES: &[(&str, &[u8])] = &[
+    ("main.js", DIST_MAIN),
+    ("preload.js", DIST_PRELOAD),
+    ("renderer.js", DIST_RENDERER),
+];
+
+/// Deploy the embedded framework bundles into the Monocord data dir so the
+/// exe is a self-contained installer. Refuses when the binary was built
+/// without `pnpm build` having produced real bundles.
+fn deploy_dist(paths: &ConfigPaths) -> anyhow::Result<()> {
+    let dist_dir = paths.root.join("dist");
+    std::fs::create_dir_all(&dist_dir)
+        .with_context(|| format!("creating {}", dist_dir.display()))?;
+    for (name, bytes) in DIST_FILES {
+        if bytes.starts_with(DIST_STUB_MARKER) {
+            anyhow::bail!(
+                "installer was built without framework bundles — \
+                 run `pnpm build` then rebuild with `cargo build --release -p monocord`"
+            );
+        }
+        let dest = dist_dir.join(name);
+        std::fs::write(&dest, bytes).with_context(|| format!("writing {}", dest.display()))?;
+    }
+    Ok(())
+}
 
 #[derive(Parser)]
 #[command(
@@ -16,7 +50,7 @@ use monocord_core::{
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
@@ -83,7 +117,18 @@ fn main() -> anyhow::Result<()> {
     monocord_core::log::init(&paths.logs);
     tracing::info!("monocord cli starting");
 
-    match cli.command {
+    let Some(command) = cli.command else {
+        // No subcommand: interactive installer (Vencord-style). Falls back
+        // to help output when stdin isn't a terminal.
+        if io::stdin().is_terminal() {
+            return cmd_interactive(&paths);
+        }
+        Cli::command().print_help()?;
+        println!();
+        return Ok(());
+    };
+
+    match command {
         Command::Detect => {
             cmd_detect();
             Ok(())
@@ -238,8 +283,14 @@ fn bootstrap_path(paths: &ConfigPaths) -> PathBuf {
 }
 
 fn cmd_install(paths: &ConfigPaths, channel: &str, force: bool) -> anyhow::Result<()> {
-    let channel = channel_arg(channel)?;
+    do_install(paths, channel_arg(channel)?, force)
+}
+
+fn do_install(paths: &ConfigPaths, channel: Channel, force: bool) -> anyhow::Result<()> {
     let inst = find_install(channel)?;
+
+    // Deploy embedded framework bundles, then patch app.asar.
+    deploy_dist(paths)?;
 
     // Refuse to clobber a foreign patch unless forced.
     match monocord_core::patch::inspect(&inst.resources) {
@@ -289,7 +340,10 @@ fn cmd_install(paths: &ConfigPaths, channel: &str, force: bool) -> anyhow::Resul
 }
 
 fn cmd_uninstall(paths: &ConfigPaths, channel: &str) -> anyhow::Result<()> {
-    let channel = channel_arg(channel)?;
+    do_uninstall(paths, channel_arg(channel)?)
+}
+
+fn do_uninstall(paths: &ConfigPaths, channel: Channel) -> anyhow::Result<()> {
     let inst = find_install(channel)?;
     let installer = Installer::new(inst.version_dir.clone(), backup_dir_for(paths, &inst));
     installer.restore()?;
@@ -314,4 +368,151 @@ fn cmd_patch_status(channel: &str) -> anyhow::Result<()> {
         monocord_core::PatchState::Unreadable { reason } => println!("unreadable: {reason}"),
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Interactive installer (no subcommand, TTY stdin)
+// ---------------------------------------------------------------------------
+
+fn patch_state_label(inst: &monocord_core::DiscordInstall) -> String {
+    match monocord_core::patch::inspect(&inst.resources) {
+        monocord_core::PatchState::Monocord => "monocord installed".to_string(),
+        monocord_core::PatchState::Pristine => "not installed".to_string(),
+        monocord_core::PatchState::Foreign { hint } => format!("foreign patch ({hint})"),
+        monocord_core::PatchState::Unreadable { reason } => format!("unreadable ({reason})"),
+    }
+}
+
+fn prompt(msg: &str) -> String {
+    print!("{msg}");
+    let _ = io::stdout().flush();
+    let mut line = String::new();
+    if io::stdin().lock().read_line(&mut line).is_err() {
+        return String::new();
+    }
+    line.trim().to_string()
+}
+
+fn confirm(msg: &str) -> bool {
+    let answer = prompt(&format!("{msg} [y/N] "));
+    answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes")
+}
+
+/// Pick a Discord install interactively; returns None on cancel/quit.
+fn pick_install(installs: &[monocord_core::DiscordInstall]) -> Option<Channel> {
+    if installs.is_empty() {
+        println!("no discord installations detected");
+        return None;
+    }
+    if installs.len() == 1 {
+        return Some(installs[0].channel);
+    }
+    println!("\ndetected discord installs:");
+    for (i, inst) in installs.iter().enumerate() {
+        println!(
+            "  {}) {} {} — {}",
+            i + 1,
+            inst.channel,
+            inst.version,
+            patch_state_label(inst)
+        );
+    }
+    loop {
+        let answer = prompt(&format!("select install [1-{} or q]: ", installs.len()));
+        if answer.eq_ignore_ascii_case("q") {
+            return None;
+        }
+        if let Ok(n) = answer.parse::<usize>()
+            && (1..=installs.len()).contains(&n)
+        {
+            return Some(installs[n - 1].channel);
+        }
+        println!("invalid selection");
+    }
+}
+
+fn interactive_install(paths: &ConfigPaths) -> anyhow::Result<()> {
+    let installs = detect_all();
+    let Some(channel) = pick_install(&installs) else {
+        return Ok(());
+    };
+
+    // Foreign patch → confirm overwrite.
+    let inst = find_install(channel)?;
+    let mut force = false;
+    if let monocord_core::PatchState::Foreign { hint } =
+        monocord_core::patch::inspect(&inst.resources)
+    {
+        println!("\nwarning: app.asar is owned by another modification ({hint})");
+        if !confirm("overwrite it and install Monocord?") {
+            println!("aborted");
+            return Ok(());
+        }
+        force = true;
+    }
+
+    // Discord running → warn.
+    if !running_discord_processes().is_empty()
+        && !confirm("discord is running — install anyway? (restart required)")
+    {
+        println!("aborted");
+        return Ok(());
+    }
+
+    do_install(paths, channel, force)?;
+    println!("\ndone — restart discord to load Monocord");
+    Ok(())
+}
+
+fn interactive_uninstall(paths: &ConfigPaths) -> anyhow::Result<()> {
+    let installs = detect_all();
+    let Some(channel) = pick_install(&installs) else {
+        return Ok(());
+    };
+    if !confirm("uninstall Monocord and restore the original app.asar?") {
+        println!("aborted");
+        return Ok(());
+    }
+    do_uninstall(paths, channel)?;
+    println!("\ndone — restart discord");
+    Ok(())
+}
+
+fn cmd_interactive(paths: &ConfigPaths) -> anyhow::Result<()> {
+    println!("=== Monocord Installer v{} ===", env!("CARGO_PKG_VERSION"));
+    loop {
+        let installs = detect_all();
+        println!("\ndetected installs: {}", installs.len());
+        for inst in &installs {
+            println!(
+                "  {} {} — {}",
+                inst.channel,
+                inst.version,
+                patch_state_label(inst)
+            );
+        }
+        let procs = running_discord_processes();
+        if !procs.is_empty() {
+            println!("discord is running ({} process(es))", procs.len());
+        }
+        println!("\n  [i] install    [u] uninstall");
+        println!("  [d] detect     [s] status");
+        println!("  [q] quit");
+        match prompt("choice: ").to_ascii_lowercase().as_str() {
+            "i" => {
+                if let Err(e) = interactive_install(paths) {
+                    eprintln!("error: {e:#}");
+                }
+            }
+            "u" => {
+                if let Err(e) = interactive_uninstall(paths) {
+                    eprintln!("error: {e:#}");
+                }
+            }
+            "d" => cmd_detect(),
+            "s" => cmd_status(paths)?,
+            "q" | "" => return Ok(()),
+            other => println!("unknown choice '{other}'"),
+        }
+    }
 }

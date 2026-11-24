@@ -1,0 +1,21 @@
+{
+  "name": "monocord",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Monocord — a Vencord-inspired Discord client modification framework (Rust native core + TypeScript modification layer)",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:main": "esbuild src/core/bootstrap/main.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist/main.js",
+    "build:preload": "esbuild src/core/bootstrap/preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist/preload.js",
+    "build:renderer": "esbuild src/renderer/index.ts --bundle --platform=browser --format=iife --outfile=dist/renderer.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  }
+}

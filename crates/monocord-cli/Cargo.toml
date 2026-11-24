@@ -1,0 +1,21 @@
+[package]
+name = "monocord"
+description = "Monocord CLI — Discord modification framework manager"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "monocord"
+path = "src/main.rs"
+
+[dependencies]
+monocord-core = { path = "../monocord-core" }
+clap.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

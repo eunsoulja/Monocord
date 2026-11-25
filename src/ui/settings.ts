@@ -156,6 +156,7 @@ export class OverviewPanel extends PanelBase {
     override state: { info: Record<string, unknown> | null } = { info: null };
 
     componentDidMount(): void {
+        ensurePluginsCss();
         const bridge = (window as { monocord?: { invoke(c: string): Promise<unknown> } })
             .monocord;
         if (bridge) {
@@ -172,6 +173,12 @@ export class OverviewPanel extends PanelBase {
         const enabledCount = Api.Plugins.names().filter((n) =>
             Api.Plugins.isEnabled(n),
         ).length;
+        const stats: [string, string][] = [
+            ["Framework", `v${Api.version}`],
+            ["Discord", String(info?.discord ?? "unknown")],
+            ["Host", "Electron"],
+            ["Plugins", `${enabledCount} enabled / ${pluginCount}`],
+        ];
 
         return h(
         "div",
@@ -179,28 +186,24 @@ export class OverviewPanel extends PanelBase {
         h("h2", { style: S.h2 }, "Monocord"),
         h(
             "div",
-            { style: S.card },
-            h("div", null, `Framework v${Api.version}`),
-            h(
-                "div",
-                { style: S.muted },
-                `Discord ${String(info?.discord ?? "unknown")} · Electron host`,
+            { className: "mc-grid" },
+            stats.map(([label, value]) =>
+                h(
+                    "div",
+                    { key: label, className: "mc-card" },
+                    h("div", { className: "mc-author" }, label),
+                    h("div", { className: "mc-name", style: { fontSize: 18 } }, value),
+                ),
             ),
         ),
         h(
             "div",
-            { style: S.card },
+            { className: "mc-card", style: { marginTop: 12 } },
             h(
                 "div",
-                { style: S.row },
-                h("span", null, "Plugins"),
-                h("span", { style: S.muted }, `${enabledCount} enabled / ${pluginCount} registered`),
+                { className: "mc-desc", style: { minHeight: 0, opacity: 1 } },
+                "Monocord is a Vencord-inspired modification framework. Manage plugins from the Plugins tab and themes from the Themes tab.",
             ),
-        ),
-        h(
-            "div",
-            { style: { ...S.card, ...S.muted } },
-            "Monocord is a Vencord-inspired modification framework. Manage plugins and themes from the sidebar.",
         ),
         );
     }
@@ -796,6 +799,7 @@ export class ThemesPanel extends PanelBase {
     private offs: (() => void)[] = [];
 
     componentDidMount(): void {
+        ensurePluginsCss();
         void Themes.list().then((themes) => this.setState({ themes }));
         void Settings.get<string>("theme.customCss", "").then((v) =>
             this.setState({ customCss: v ?? "" }),
@@ -830,11 +834,7 @@ export class ThemesPanel extends PanelBase {
         h("h2", { style: S.h2 }, "Themes"),
         h(
             "div",
-            { style: S.card },
-            h("div", { style: { ...S.row, marginBottom: 8 } },
-                h("strong", null, "Installed themes"),
-                h("button", { style: S.btnOff, onClick: () => activate(null) }, "None"),
-            ),
+            { className: "mc-grid" },
             themes === null
                 ? h("div", { style: S.muted }, "Loading…")
                 : themes.length === 0
@@ -842,31 +842,52 @@ export class ThemesPanel extends PanelBase {
                   : themes.map((t) =>
                         h(
                             "div",
-                            { key: t.name, style: { ...S.row, padding: "6px 0" } },
+                            { key: t.name, className: "mc-card" },
                             h(
-                                "span",
-                                null,
-                                t.label ?? t.name,
+                                "div",
+                                { className: "mc-head" },
+                                h(
+                                    "div",
+                                    { className: "mc-name" },
+                                    t.label ?? t.name,
+                                ),
                                 active === t.name
                                     ? h(Badge, { ok: true, text: "active" })
-                                    : null,
+                                    : h(
+                                          "button",
+                                          {
+                                              style: S.btn,
+                                              onClick: () => activate(t.name),
+                                          },
+                                          "Apply",
+                                      ),
                             ),
                             h(
-                                "button",
-                                {
-                                    style: active === t.name ? S.btnOff : S.btn,
-                                    onClick: () => activate(t.name),
-                                },
-                                active === t.name ? "Active" : "Apply",
+                                "div",
+                                { className: "mc-desc", style: { minHeight: 0 } },
+                                t.name,
                             ),
                         ),
                     ),
         ),
+        active !== null
+            ? h(
+                  "div",
+                  { style: { marginTop: 8 } },
+                  h(
+                      "button",
+                      { style: S.btnOff, onClick: () => activate(null) },
+                      "Disable theme",
+                  ),
+              )
+            : null,
         h(
             "div",
-            { style: S.card },
-            h("div", { style: { ...S.row, marginBottom: 8 } },
-                h("strong", null, "Custom CSS"),
+            { className: "mc-card", style: { marginTop: 16 } },
+            h(
+                "div",
+                { className: "mc-head", style: { marginBottom: 8 } },
+                h("div", { className: "mc-name", style: { fontSize: 14 } }, "Custom CSS"),
                 h(
                     "button",
                     {

@@ -328,7 +328,7 @@ export class PluginsPanel extends PanelBase {
                   const open = openSettings === name;
                   return h(
                       "div",
-                      { key: name, style: S.card },
+                      { key: name, style: { ...S.card, padding: "10px 14px" } },
                       h(
                           "div",
                           { style: S.row },
@@ -339,11 +339,10 @@ export class PluginsPanel extends PanelBase {
                               plugin.version
                                   ? h("span", { style: S.muted }, ` v${plugin.version}`)
                                   : null,
-                              h("div", { style: S.muted }, plugin.description ?? ""),
                           ),
                           h(
                               "div",
-                              { style: { display: "flex", gap: 8 } },
+                              { style: { display: "flex", alignItems: "center", gap: 10 } },
                               keys.length > 0
                                   ? h(
                                         "button",
@@ -352,13 +351,16 @@ export class PluginsPanel extends PanelBase {
                                             onClick: () =>
                                                 this.toggleSettings(name, plugin),
                                         },
-                                        open ? "Hide settings" : "Settings",
+                                        open ? "Hide" : "Settings",
                                     )
                                   : null,
+                              // Toggle switch
                               h(
                                   "button",
                                   {
-                                      style: enabled ? S.btnOff : S.btn,
+                                      role: "switch",
+                                      "aria-checked": enabled,
+                                      title: enabled ? "Disable" : "Enable",
                                       onClick: () => {
                                           const p = enabled
                                               ? Api.Plugins.disable(name)
@@ -367,10 +369,48 @@ export class PluginsPanel extends PanelBase {
                                               log.error(`toggle ${name} failed`, e),
                                           );
                                       },
+                                      style: {
+                                          position: "relative",
+                                          width: 42,
+                                          height: 24,
+                                          borderRadius: 12,
+                                          border: "none",
+                                          cursor: "pointer",
+                                          padding: 0,
+                                          flexShrink: 0,
+                                          background: enabled
+                                              ? "var(--status-positive, #23a55a)"
+                                              : "var(--background-modifier-accent, #4e5058)",
+                                          transition: "background .15s",
+                                      },
                                   },
-                                  enabled ? "Disable" : "Enable",
+                                  h("span", {
+                                      style: {
+                                          position: "absolute",
+                                          top: 3,
+                                          left: enabled ? 21 : 3,
+                                          width: 18,
+                                          height: 18,
+                                          borderRadius: "50%",
+                                          background: "#fff",
+                                          transition: "left .15s",
+                                          boxShadow: "0 1px 3px rgba(0,0,0,.4)",
+                                      },
+                                  }),
                               ),
                           ),
+                      ),
+                      h(
+                          "div",
+                          {
+                              style: {
+                                  ...S.muted,
+                                  marginTop: 4,
+                                  marginLeft: 2,
+                                  fontSize: 12,
+                              },
+                          },
+                          plugin.description ?? "No description",
                       ),
                       open
                           ? h(

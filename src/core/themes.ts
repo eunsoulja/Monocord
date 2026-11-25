@@ -103,6 +103,14 @@ export const Themes = {
             } catch (e) {
                 log.warn(`could not restore theme "${active}"`, e);
             }
+        } else if (!(await Settings.get<boolean>("theme.defaultApplied", false))) {
+            // First run with no chosen theme: apply the bundled default once.
+            await Settings.set("theme.defaultApplied", true);
+            try {
+                await this.activate("system24");
+            } catch (e) {
+                log.warn("could not apply default theme", e);
+            }
         }
     },
 

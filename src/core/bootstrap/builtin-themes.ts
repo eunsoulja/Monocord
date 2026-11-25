@@ -7,6 +7,8 @@
  * work and can shadow a built-in of the same name.
  */
 
+import { SYSTEM24_CSS } from "./system24-theme";
+
 export interface BuiltinTheme {
     name: string;
     label: string;
@@ -310,5 +312,11 @@ export const BUILTIN_THEMES: BuiltinTheme[] = [
     --input-background: #1e1f1c;
 }
 `),
+    },
+    {
+        name: "system24",
+        label: "system24",
+        authors: ["refact0r"],
+        css: SYSTEM24_CSS,
     },
 ];

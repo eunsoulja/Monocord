@@ -369,6 +369,33 @@ class WebpackFinder {
         );
     }
 
+    /**
+     * Find exports of the first module whose factory source contains `code`.
+     * For modules with mangled export names that can only be located by
+     * their internals. Misses are not cached — lazy chunks may register
+     * the factory later.
+     */
+    findByCode(code: string | RegExp): unknown {
+        const key = `code:${String(code)}`;
+        return this.cached(key, () => {
+            const req = this.require_();
+            for (const id of Object.keys(req.m ?? {})) {
+                const factory = (req.m as Record<string, unknown>)[id];
+                if (typeof factory !== "function") continue;
+                let source: string;
+                try {
+                    source = Function.prototype.toString.call(factory);
+                } catch {
+                    continue;
+                }
+                if (!matchesFind(source, code)) continue;
+                const exports = this.getExports(id);
+                if (exports !== undefined) return exports;
+            }
+            return undefined;
+        });
+    }
+
     /** Find a Flux store by display name. */
     findStore(name: string): unknown | undefined {
         const mod = this.findByDisplayName(name);

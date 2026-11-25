@@ -64,7 +64,78 @@ function assetValue(raw: string): string {
 
 /** Strip a known external-asset prefix for preview rendering. */
 function previewAssetUrl(v: string): string {
-    return v.replace(/^(?:gif|mp4|youtube|twitch|spotify|external|url):/i, "");
+    return v
+        .replace(/^mp:external\//i, "")
+        .replace(/^(?:gif|mp4|youtube|twitch|spotify|external|url):/i, "");
+}
+
+type FetchAssetIds = (appId: string, keys: string[]) => Promise<string[]>;
+
+let assetUtilsTried = false;
+let fetchAssetIds: FetchAssetIds | null = null;
+let assetUtilsWarned = false;
+
+/**
+ * Locate Discord's ApplicationAssetUtils module (mangled exports) and pull
+ * out `fetchAssetIds` — the function Vencord uses to turn an image key or
+ * URL into the asset id Discord's servers accept. Without this step the
+ * presence renders locally but is dropped when broadcast to other clients.
+ */
+function findFetchAssetIds(): FetchAssetIds | null {
+    if (fetchAssetIds) return fetchAssetIds;
+    if (assetUtilsTried) return null;
+    assetUtilsTried = true;
+    try {
+        const mod = Api.Webpack.findByCode("getAssetImage: size must === [");
+        const candidates: unknown[] = [];
+        if (mod && typeof mod === "object") {
+            candidates.push(mod, (mod as Record<string, unknown>).default);
+        } else {
+            candidates.push(mod);
+        }
+        for (const c of candidates) {
+            if (!c || typeof c !== "object") continue;
+            for (const v of Object.values(c as Record<string, unknown>)) {
+                if (typeof v !== "function") continue;
+                const src = Function.prototype.toString.call(v);
+                if (/startsWith\(["']http:/.test(src)) {
+                    fetchAssetIds = v as FetchAssetIds;
+                    log.info("asset utils found — image keys will be resolved");
+                    return fetchAssetIds;
+                }
+            }
+        }
+    } catch (e) {
+        log.warn("asset utils lookup failed", e);
+    }
+    // Not found yet — the module may live in a lazy chunk. Reset so the
+    // next pushConfig retries instead of giving up permanently.
+    assetUtilsTried = false;
+    return null;
+}
+
+/**
+ * Resolve an image key/URL through Discord's asset pipeline (Vencord
+ * parity). Falls back to the raw value when the module isn't available.
+ */
+async function resolveAsset(
+    key: string,
+    appId: string,
+): Promise<string> {
+    const fetch = appId ? findFetchAssetIds() : null;
+    if (fetch && appId) {
+        try {
+            const ids = await fetch(appId, [key]);
+            const id = ids?.[0];
+            if (typeof id === "string" && id) return id;
+        } catch (e) {
+            if (!assetUtilsWarned) {
+                assetUtilsWarned = true;
+                log.warn("fetchAssetIds failed — using raw image value", e);
+            }
+        }
+    }
+    return assetValue(key);
 }
 
 const FIELDS = [
@@ -86,7 +157,9 @@ async function readSettings(): Promise<Record<string, unknown>> {
 }
 
 /** Build the activity object Discord expects (Vencord's model). */
-function buildActivity(s: Record<string, unknown>): Record<string, unknown> | null {
+async function buildActivity(
+    s: Record<string, unknown>,
+): Promise<Record<string, unknown> | null> {
     const appName = String(s.appName ?? "").trim();
     const appId = String(s.appId ?? "").trim();
     // Vencord parity: the flux path only needs a name; application_id
@@ -156,12 +229,13 @@ function buildActivity(s: Record<string, unknown>): Record<string, unknown> | nu
     const imageSmall = str("imageSmall");
     if (imageBig || imageSmall) {
         const assets: Record<string, string> = {};
-        if (imageBig) assets.large_image = assetValue(imageBig);
+        if (imageBig) assets.large_image = await resolveAsset(imageBig, appId);
         const bigTip = str("imageBigTooltip");
         const bigUrl = str("imageBigUrl");
         if (bigTip) assets.large_text = bigTip;
         if (bigUrl) assets.large_url = bigUrl;
-        if (imageSmall) assets.small_image = assetValue(imageSmall);
+        if (imageSmall)
+            assets.small_image = await resolveAsset(imageSmall, appId);
         const smallTip = str("imageSmallTooltip");
         const smallUrl = str("imageSmallUrl");
         if (smallTip) assets.small_text = smallTip;
@@ -518,7 +592,7 @@ async function pushConfig(): Promise<void> {
     } else if (!appIdMissing) {
         warnedMissingAppId = false;
     }
-    const activity = enabled ? buildActivity(s) : null;
+    const activity = enabled ? await buildActivity(s) : null;
 
     // Primary path: Discord's own flux dispatcher (full feature set —
     // buttons, urls, party). Dispatch null to clear.
@@ -940,7 +1014,7 @@ export const CustomRPC: Plugin = {
             dispatcherPoll = null;
         }
         const s = await readSettings();
-        const activity = buildActivity(s);
+        const activity = await buildActivity(s);
         if (activity && dispatcher?.dispatch) {
             dispatcher.dispatch({
                 type: "LOCAL_ACTIVITY_UPDATE",

@@ -11,7 +11,7 @@
 import { Api } from "../core/api";
 import { Logger } from "../core/logger";
 import type { Plugin, PluginSettingsViewContext } from "../core/types";
-import { findDispatcher, type Dispatcher } from "./mods";
+import { findDispatcher, findStoreByName, type Dispatcher } from "./mods";
 
 const log = Logger.get("custom-rpc");
 
@@ -182,6 +182,14 @@ function toIpcActivity(activity: Record<string, unknown>): Record<string, unknow
     const out: Record<string, unknown> = { type: activity.type ?? 0 };
     for (const key of ["name", "state", "details", "url", "timestamps", "party", "assets"]) {
         if (activity[key] != null) out[key] = activity[key];
+    }
+    // Discord's IPC protocol wants unix SECONDS, not milliseconds.
+    const ts = out.timestamps as Record<string, unknown> | undefined;
+    if (ts) {
+        for (const k of ["start", "end"] as const) {
+            const v = ts[k];
+            if (typeof v === "number" && v > 1e12) ts[k] = Math.floor(v / 1000);
+        }
     }
     const assets = activity.assets as Record<string, unknown> | undefined;
     if (assets) {
@@ -457,6 +465,44 @@ function ensureDispatcher(): void {
 }
 
 let warnedMissingAppId = false;
+let diagnosed = false;
+
+/** Read Discord's activity stores back to verify the dispatch landed. */
+function diagnoseActivity(): void {
+    if (diagnosed) return;
+    diagnosed = true;
+    for (const name of [
+        "LocalActivityStore",
+        "ActivityStore",
+        "ActivityTrackingStore",
+    ]) {
+        const st = findStoreByName(name);
+        if (!st) {
+            log.info(`rpc diag: ${name} not found`);
+            continue;
+        }
+        const keys = Object.keys(st).slice(0, 25).join(",");
+        log.info(`rpc diag: ${name} keys: ${keys}`);
+        for (const m of [
+            "getAllActivities",
+            "getActivities",
+            "getLocalActivity",
+            "getVisibleActivities",
+            "getState",
+        ]) {
+            const fn = st[m];
+            if (typeof fn !== "function") continue;
+            try {
+                const r = fn.call(st);
+                log.info(
+                    `rpc diag: ${name}.${m}() = ${JSON.stringify(r)?.slice(0, 600)}`,
+                );
+            } catch (e) {
+                log.info(`rpc diag: ${name}.${m} threw ${String(e)}`);
+            }
+        }
+    }
+}
 
 async function pushConfig(): Promise<void> {
     const s = await readSettings();
@@ -483,6 +529,8 @@ async function pushConfig(): Promise<void> {
             activity,
             socketId: "CustomRPC",
         });
+        // Verify the action actually reached Discord's activity store.
+        setTimeout(diagnoseActivity, 3000);
     }
 
     // Fallback: game IPC pipe (requires numeric app id, no buttons).
@@ -494,6 +542,7 @@ async function pushConfig(): Promise<void> {
         await b.invoke("rpc-clear").catch(() => {});
         return;
     }
+    log.info(`rpc: sending SET_ACTIVITY via IPC pipe (appId ${appId})`);
     await b
         .invoke("rpc-set", { appId, activity: toIpcActivity(activity) })
         .catch((e) => log.warn("failed to set rich presence", e));

@@ -261,11 +261,26 @@ function toIpcActivity(activity: Record<string, unknown>): Record<string, unknow
         "url",
         "timestamps",
         "party",
-        "buttons",
-        "metadata",
         "assets",
     ]) {
         if (activity[key] != null) out[key] = activity[key];
+    }
+    // The flux model stores buttons as label strings + metadata.button_urls;
+    // the IPC schema wants [{label, url}] objects — one wrong shape gets the
+    // whole SET_ACTIVITY rejected with a 4000 validation error.
+    const buttons = activity.buttons;
+    const buttonUrls = (
+        activity.metadata as Record<string, unknown> | undefined
+    )?.button_urls;
+    if (Array.isArray(buttons) && buttons.length) {
+        const urls = Array.isArray(buttonUrls) ? buttonUrls : [];
+        out.buttons = buttons
+            .map((label, i) => ({
+                label: String(label),
+                url: typeof urls[i] === "string" ? urls[i] : "",
+            }))
+            .filter((b) => b.label);
+        if (!(out.buttons as unknown[]).length) delete out.buttons;
     }
     // Discord's IPC protocol wants unix SECONDS, not milliseconds.
     const ts = out.timestamps as Record<string, unknown> | undefined;

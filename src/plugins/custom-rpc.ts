@@ -707,10 +707,19 @@ export const CustomRPC: Plugin = {
                 return warn("Use a direct image URL (i.imgur.com/…).");
             return null;
         };
+        const streamUrl = str("streamUrl").trim();
         const streamWarn =
-            type === 1 && !str("streamUrl").trim()
+            type === 1 && !streamUrl
                 ? warn("Streaming type needs a Twitch/YouTube URL.")
-                : null;
+                : type === 1 &&
+                    streamUrl &&
+                    !/https?:\/\/(www\.)?(twitch\.tv|youtube\.com|youtu\.be)\//.test(
+                        streamUrl,
+                    )
+                  ? warn(
+                        "Discord only allows Twitch and YouTube links for Streaming — this presence will be rejected. Use Playing/Watching instead, or a supported URL.",
+                    )
+                  : null;
 
         const onlyPlaying = type !== 0;
         const customTs = tsMode !== "custom";

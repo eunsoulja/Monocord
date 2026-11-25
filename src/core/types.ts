@@ -14,10 +14,30 @@ export interface Plugin {
     required?: string[];
     /** Optional user-facing settings schema (key → default). */
     settings?: Record<string, unknown>;
+    /**
+     * Optional typed settings schema — when present, the plugins panel
+     * renders real form controls for these keys instead of the raw JSON
+     * editor. Keys should match entries in `settings`.
+     */
+    settingsSchema?: Record<string, SettingField>;
     /** Called when the plugin is enabled. Throwing is caught and reported. */
     start?(): void | Promise<void>;
     /** Called when the plugin is disabled. Must undo everything `start` did. */
     stop?(): void | Promise<void>;
+}
+
+/** A single typed setting rendered by the plugins panel. */
+export interface SettingField {
+    /** Control type. */
+    type: "string" | "boolean" | "number" | "select" | "textarea";
+    /** Label shown next to the control. */
+    label?: string;
+    /** Help text shown under the control. */
+    description?: string;
+    /** Placeholder for string/textarea inputs. */
+    placeholder?: string;
+    /** Options for `select` fields. */
+    options?: { label: string; value: string }[];
 }
 
 /** On-disk manifest for a third-party plugin (`monocord-plugin.json`). */

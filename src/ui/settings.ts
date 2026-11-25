@@ -237,7 +237,8 @@ export class PluginsPanel extends PanelBase {
         openSettings: string | null;
         drafts: Record<string, string>;
         errors: Record<string, string>;
-    } = { rev: 0, openSettings: null, drafts: {}, errors: {} };
+        values: Record<string, Record<string, unknown>>;
+    } = { rev: 0, openSettings: null, drafts: {}, errors: {}, values: {} };
     private offs: (() => void)[] = [];
 
     componentDidMount(): void {
@@ -270,7 +271,140 @@ export class PluginsPanel extends PanelBase {
                 [name]: JSON.stringify(values, null, 2),
             },
             errors: { ...this.state.errors, [name]: "" },
+            values: { ...this.state.values, [name]: values },
         });
+    }
+
+    private setSetting(
+        name: string,
+        key: string,
+        value: unknown,
+        plugin: Plugin,
+    ): void {
+        const cur = this.state.values[name] ?? {};
+        this.setState({
+            values: { ...this.state.values, [name]: { ...cur, [key]: value } },
+        });
+        void Settings.set(`plugins.settings.${name}.${key}`, value).catch(
+            (e) => log.error(`settings set ${name}.${key} failed`, e),
+        );
+    }
+
+    private renderField(
+        name: string,
+        plugin: Plugin,
+        key: string,
+        field: NonNullable<Plugin["settingsSchema"]>[string],
+    ): unknown {
+        const value = this.state.values[name]?.[key] ?? plugin.settings?.[key];
+        const set = (v: unknown) => this.setSetting(name, key, v, plugin);
+        const label = field.label ?? key;
+        const common = { disabled: !Api.Plugins.isEnabled(name) };
+
+        let control: unknown;
+        switch (field.type) {
+            case "boolean":
+                control = h(
+                    "button",
+                    {
+                        role: "switch",
+                        "aria-checked": value === true,
+                        disabled: common.disabled,
+                        onClick: () => set(value !== true),
+                        style: {
+                            position: "relative",
+                            width: 40,
+                            height: 22,
+                            borderRadius: 11,
+                            border: "none",
+                            cursor: common.disabled ? "default" : "pointer",
+                            padding: 0,
+                            flexShrink: 0,
+                            background:
+                                value === true
+                                    ? "var(--status-positive, #23a55a)"
+                                    : "var(--background-modifier-accent, #4e5058)",
+                            transition: "background .15s",
+                        },
+                    },
+                    h("span", {
+                        style: {
+                            position: "absolute",
+                            top: 2,
+                            left: value === true ? 20 : 2,
+                            width: 18,
+                            height: 18,
+                            borderRadius: "50%",
+                            background: "#fff",
+                            transition: "left .15s",
+                            boxShadow: "0 1px 3px rgba(0,0,0,.4)",
+                        },
+                    }),
+                );
+                break;
+            case "select":
+                control = h(
+                    "select",
+                    {
+                        ...common,
+                        value: String(value ?? ""),
+                        onChange: (e: { target: { value: string } }) =>
+                            set(e.target.value),
+                        style: { ...S.input, width: "auto", minWidth: 140 },
+                    },
+                    (field.options ?? []).map((o) =>
+                        h("option", { key: o.value, value: o.value }, o.label),
+                    ),
+                );
+                break;
+            case "number":
+                control = h("input", {
+                    ...common,
+                    type: "number",
+                    value: value == null ? "" : String(value),
+                    placeholder: field.placeholder,
+                    onChange: (e: { target: { value: string } }) =>
+                        set(e.target.value === "" ? null : Number(e.target.value)),
+                    style: { ...S.input, width: 90 },
+                });
+                break;
+            case "textarea":
+                control = h("textarea", {
+                    ...common,
+                    value: String(value ?? ""),
+                    placeholder: field.placeholder,
+                    onChange: (e: { target: { value: string } }) => set(e.target.value),
+                    style: { ...S.input, minHeight: 64, resize: "vertical" },
+                });
+                break;
+            default:
+                control = h("input", {
+                    ...common,
+                    type: "text",
+                    value: String(value ?? ""),
+                    placeholder: field.placeholder,
+                    onChange: (e: { target: { value: string } }) => set(e.target.value),
+                    style: S.input,
+                });
+        }
+
+        return h(
+            "div",
+            { key, style: { marginTop: 10 } },
+            h(
+                "div",
+                { style: { ...S.row, alignItems: "flex-start" } },
+                h(
+                    "label",
+                    { style: { fontSize: 13, fontWeight: 500, flex: "0 0 160px" } },
+                    label,
+                ),
+                h("div", { style: { flex: 1, minWidth: 0 } }, control),
+            ),
+            field.description
+                ? h("div", { style: { ...S.muted, marginTop: 3, marginLeft: 172 } }, field.description)
+                : null,
+        );
     }
 
     private toggleSettings(name: string, plugin: Plugin): void {
@@ -413,7 +547,29 @@ export class PluginsPanel extends PanelBase {
                           plugin.description ?? "No description",
                       ),
                       open
-                          ? h(
+                          ? plugin.settingsSchema
+                              ? h(
+                                    "div",
+                                    { style: { marginTop: 10, paddingLeft: 4 } },
+                                    Object.entries(plugin.settingsSchema).map(
+                                        ([key, field]) =>
+                                            this.renderField(name, plugin, key, field),
+                                    ),
+                                    errors[name]
+                                        ? h(
+                                              "div",
+                                              {
+                                                  style: {
+                                                      ...S.muted,
+                                                      color: "var(--status-danger,#f23f43)",
+                                                      marginTop: 6,
+                                                  },
+                                              },
+                                              errors[name],
+                                          )
+                                        : null,
+                                )
+                              : h(
                                 "div",
                                 { style: { marginTop: 10 } },
                                 h("textarea", {

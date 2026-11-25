@@ -710,6 +710,12 @@ const UserPronouns: Plugin = {
     authors: ["Monocord"],
     version: "0.1.0",
     settings: { enabled: true },
+    settingsSchema: {
+        enabled: {
+            type: "boolean",
+            label: "Enabled",
+        },
+    },
 
     start() {
         const off = on(
@@ -833,6 +839,13 @@ const ConsoleJanitor: Plugin = {
     authors: ["Monocord"],
     version: "0.1.0",
     settings: { patterns: DEFAULT_JANITOR_PATTERNS.join("\n") },
+    settingsSchema: {
+        patterns: {
+            type: "textarea",
+            label: "Suppressed patterns",
+            description: "One regex per line matched against console messages.",
+        },
+    },
 
     start() {
         const originals = {
@@ -1107,6 +1120,13 @@ const MessageLatency: Plugin = {
     authors: ["Monocord"],
     version: "0.1.0",
     settings: { thresholdMs: 2000 },
+    settingsSchema: {
+        thresholdMs: {
+            type: "number",
+            label: "Threshold (ms)",
+            description: "Show indicator for messages that took at least this long to send.",
+        },
+    },
 
     start() {
         const mod = findSendModule();

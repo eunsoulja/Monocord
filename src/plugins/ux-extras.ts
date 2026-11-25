@@ -347,6 +347,13 @@ const Oneko: Plugin = {
     authors: ["Monocord"],
     version: "0.1.0",
     settings: { speed: 300 },
+    settingsSchema: {
+        speed: {
+            type: "number",
+            label: "Speed (ms per step)",
+            description: "Lower = faster cat.",
+        },
+    },
 
     start() {
         const cat = el(
@@ -488,6 +495,21 @@ const SendTimestamps: Plugin = {
     authors: ["Monocord"],
     version: "0.1.0",
     settings: { style: "F" },
+    settingsSchema: {
+        style: {
+            type: "select",
+            label: "Timestamp format",
+            options: ([
+                ["t", "Short time (16:20)"],
+                ["T", "Long time (16:20:30)"],
+                ["d", "Short date (20/04/2026)"],
+                ["D", "Long date (April 20, 2026)"],
+                ["f", "Short date+time"],
+                ["F", "Full date+time"],
+                ["R", "Relative (2 hours ago)"],
+            ] as [string, string][]).map(([value, label]) => ({ value, label })),
+        },
+    },
 
     start() {
         const cleanups: (() => void)[] = [];
@@ -641,6 +663,29 @@ const ClientTheme: Plugin = {
         danger: "",
         warning: "",
     },
+    settingsSchema: Object.fromEntries(
+        [
+            ["brand", "Brand color"],
+            ["brandHover", "Brand hover"],
+            ["background", "Background"],
+            ["secondary", "Secondary background"],
+            ["tertiary", "Tertiary background"],
+            ["floating", "Floating background"],
+            ["text", "Text color"],
+            ["muted", "Muted text"],
+            ["success", "Success"],
+            ["danger", "Danger"],
+            ["warning", "Warning"],
+        ].map(([key, label]) => [
+            key,
+            {
+                type: "string" as const,
+                label,
+                description: "Hex or rgb() color, e.g. #5865f2. Empty = default.",
+                placeholder: "#5865f2",
+            },
+        ]),
+    ),
 
     async start() {
         const apply = async () => {

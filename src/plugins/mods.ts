@@ -75,6 +75,13 @@ const MessageLogger: Plugin = {
     authors: ["Monocord"],
     version: "0.1.0",
     settings: { includeContent: true },
+    settingsSchema: {
+        includeContent: {
+            type: "boolean",
+            label: "Include message content",
+            description: "Store message text in the log (otherwise only metadata).",
+        },
+    },
 
     async start() {
         const dispatcher = findDispatcher();
@@ -425,6 +432,20 @@ const Translate: Plugin = {
     authors: ["Monocord"],
     version: "0.1.0",
     settings: { target: "en" },
+    settingsSchema: {
+        target: {
+            type: "select",
+            label: "Target language",
+            options: ([
+                ["en", "English"], ["es", "Spanish"], ["fr", "French"],
+                ["de", "German"], ["pt", "Portuguese"], ["it", "Italian"],
+                ["ja", "Japanese"], ["ko", "Korean"], ["zh-CN", "Chinese (Simplified)"],
+                ["zh-TW", "Chinese (Traditional)"], ["ru", "Russian"],
+                ["ar", "Arabic"], ["hi", "Hindi"], ["nl", "Dutch"],
+                ["pl", "Polish"], ["tr", "Turkish"], ["vi", "Vietnamese"],
+            ] as [string, string][]).map(([value, label]) => ({ value, label })),
+        },
+    },
 
     start() {
         const off = on(

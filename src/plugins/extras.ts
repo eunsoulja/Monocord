@@ -172,6 +172,13 @@ const FakeTyping: Plugin = {
     authors: ["Monocord"],
     version: "0.1.0",
     settings: { intervalSeconds: 9 },
+    settingsSchema: {
+        intervalSeconds: {
+            type: "number",
+            label: "Interval (seconds)",
+            description: "How often to send a typing indicator while enabled.",
+        },
+    },
 
     async start() {
         const starter =

@@ -179,6 +179,13 @@ const KeepCurrentChannel: Plugin = {
     authors: ["Monocord"],
     version: "0.1.0",
     settings: { restore: true },
+    settingsSchema: {
+        restore: {
+            type: "boolean",
+            label: "Restore last channel",
+            description: "Return to the channel you were in before restarting.",
+        },
+    },
 
     async start() {
         const dispatcher = findDispatcher();
@@ -245,6 +252,13 @@ const CustomIdle: Plugin = {
     authors: ["Monocord"],
     version: "0.1.0",
     settings: { minutes: 0 },
+    settingsSchema: {
+        minutes: {
+            type: "number",
+            label: "Idle after (minutes)",
+            description: "0 = Discord default (~5 min). Set higher to stay online longer.",
+        },
+    },
 
     start() {
         const store = findStoreByName("IdleStore");
@@ -591,6 +605,13 @@ const VolumeBooster: Plugin = {
     authors: ["Monocord"],
     version: "0.1.0",
     settings: { boost: 1.5 },
+    settingsSchema: {
+        boost: {
+            type: "number",
+            label: "Boost factor",
+            description: "Volume multiplier (e.g. 1.5 = +50%).",
+        },
+    },
 
     start() {
         const store = findStoreByName("MediaEngineStore");
@@ -707,6 +728,12 @@ const SuperReactionTweaks: Plugin = {
     authors: ["Monocord"],
     version: "0.1.0",
     settings: { maxReactions: 3 },
+    settingsSchema: {
+        maxReactions: {
+            type: "number",
+            label: "Max super reactions",
+        },
+    },
 
     start() {
         let patched = 0;
@@ -946,6 +973,13 @@ const FixSpotifyEmbeds: Plugin = {
     authors: ["Monocord"],
     version: "0.1.0",
     settings: { volume: 50 },
+    settingsSchema: {
+        volume: {
+            type: "number",
+            label: "Embed volume (%)",
+            description: "Volume for Spotify embeds.",
+        },
+    },
 
     start() {
         const stop = observeAdded("iframe", (node) => {

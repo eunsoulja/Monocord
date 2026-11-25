@@ -421,6 +421,8 @@ function getPluginCode(name: string): { code: string; manifest: PluginManifestIn
 
 interface RpcConfig {
     appId: string;
+    /** Prebuilt activity object (renderer-side model); falls back to flat fields. */
+    activity?: Record<string, unknown> | undefined;
     details?: string | undefined;
     state?: string | undefined;
     largeImage?: string | undefined;
@@ -454,6 +456,16 @@ function rpcSend(opcode: number, payload: unknown): void {
 function rpcSetActivity(): void {
     const cfg = rpcConfig;
     if (!cfg?.appId) return;
+    // Prefer the renderer-built activity (Vencord model) when present.
+    if (cfg.activity && typeof cfg.activity === "object") {
+        rpcNonce += 1;
+        rpcSend(1, {
+            cmd: "SET_ACTIVITY",
+            args: { pid: process.pid, activity: cfg.activity },
+            nonce: String(rpcNonce),
+        });
+        return;
+    }
     const assets: Record<string, string> = {};
     if (cfg.largeImage) assets.large_image = cfg.largeImage;
     if (cfg.largeText) assets.large_text = cfg.largeText;
@@ -519,8 +531,13 @@ function rpcSet(cfg: unknown): void {
         return;
     }
     const str = (k: string) => (typeof c[k] === "string" ? (c[k] as string) : undefined);
+    const activity =
+        c.activity && typeof c.activity === "object"
+            ? (c.activity as Record<string, unknown>)
+            : undefined;
     rpcConfig = {
         appId,
+        activity,
         details: str("details"),
         state: str("state"),
         largeImage: str("largeImage"),

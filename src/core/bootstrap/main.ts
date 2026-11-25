@@ -761,9 +761,12 @@ function rpcHandleFrame(opcode: number, body: Buffer): void {
                 evt?: string;
                 cmd?: string;
                 nonce?: string;
+                data?: unknown;
             };
+            const detail =
+                msg.evt === "ERROR" ? ` data=${JSON.stringify(msg.data)}` : "";
             log(
-                `rpc: frame evt=${msg.evt ?? "-"} cmd=${msg.cmd ?? "-"} nonce=${msg.nonce ?? "-"}`,
+                `rpc: frame evt=${msg.evt ?? "-"} cmd=${msg.cmd ?? "-"} nonce=${msg.nonce ?? "-"}${detail}`,
             );
         } catch {
             log(`rpc: frame (non-JSON, ${body.length} bytes)`);

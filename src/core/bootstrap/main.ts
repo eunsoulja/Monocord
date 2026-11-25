@@ -17,8 +17,11 @@
  */
 
 import * as fs from "node:fs";
+import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+
+import { BUILTIN_THEMES } from "./builtin-themes";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const electron = require("electron") as typeof import("electron");
@@ -237,7 +240,15 @@ function safeJoin(root: string, ...parts: string[]): string | null {
 }
 
 function listThemes(): { name: string; label?: string; authors?: string[] }[] {
-    const out: { name: string; label?: string; authors?: string[] }[] = [];
+    const builtin = BUILTIN_THEMES.map((t) => ({
+        name: t.name,
+        label: t.label,
+        authors: t.authors,
+    }));
+    const builtinNames = new Set(BUILTIN_THEMES.map((t) => t.name));
+    const out: { name: string; label?: string; authors?: string[] }[] = [
+        ...builtin,
+    ];
     let dirs: fs.Dirent[] = [];
     try {
         dirs = fs.readdirSync(THEMES_DIR, { withFileTypes: true });
@@ -256,8 +267,11 @@ function listThemes(): { name: string; label?: string; authors?: string[] }[] {
         } catch {
             // manifest optional
         }
+        const themeName = manifest.name ?? d.name;
+        // Disk themes may shadow a built-in of the same name.
+        if (builtinNames.has(themeName)) continue;
         out.push({
-            name: manifest.name ?? d.name,
+            name: themeName,
             ...(manifest.label ? { label: manifest.label } : {}),
             ...(manifest.authors ? { authors: manifest.authors } : {}),
         });
@@ -269,8 +283,10 @@ function getThemeCss(name: string): string | null {
     // Theme name must be a single path segment — no traversal.
     if (!/^[\w.-]+$/.test(name)) return null;
     const cssPath = safeJoin(THEMES_DIR, name, "theme.css");
-    if (!cssPath || !fs.existsSync(cssPath)) return null;
-    return fs.readFileSync(cssPath, "utf8");
+    if (cssPath && fs.existsSync(cssPath)) {
+        return fs.readFileSync(cssPath, "utf8");
+    }
+    return BUILTIN_THEMES.find((t) => t.name === name)?.css ?? null;
 }
 
 interface PluginManifestInfo {
@@ -319,6 +335,162 @@ function getPluginCode(name: string): { code: string; manifest: PluginManifestIn
     return { code: fs.readFileSync(codePath, "utf8"), manifest };
 }
 
+// ---------------------------------------------------------------------------
+// Discord Rich Presence (local IPC pipe)
+// ---------------------------------------------------------------------------
+//
+// Discord desktop exposes \\.\pipe\discord-ipc-0 for games to set activity.
+// We speak the same framed JSON protocol: 8-byte LE header
+// {opcode u32, length u32} + UTF-8 payload. Opcodes: 0 handshake,
+// 1 command frame, 2 close. The activity is attributed to the Discord
+// application id supplied by the user (created in the developer portal —
+// image assets must be uploaded there to render).
+
+interface RpcConfig {
+    appId: string;
+    details?: string | undefined;
+    state?: string | undefined;
+    largeImage?: string | undefined;
+    largeText?: string | undefined;
+    smallImage?: string | undefined;
+    smallText?: string | undefined;
+    elapsed?: boolean | undefined;
+}
+
+const RPC_PIPE = "\\\\.\\pipe\\discord-ipc-0";
+const RPC_RESEND_MS = 20_000;
+const RPC_RETRY_MS = 5_000;
+
+let rpcConfig: RpcConfig | null = null;
+let rpcSocket: net.Socket | null = null;
+let rpcConnecting = false;
+let rpcNonce = 0;
+let rpcResendTimer: NodeJS.Timeout | null = null;
+let rpcRetryTimer: NodeJS.Timeout | null = null;
+
+function rpcSend(opcode: number, payload: unknown): void {
+    const sock = rpcSocket;
+    if (!sock || sock.destroyed) return;
+    const body = Buffer.from(JSON.stringify(payload), "utf8");
+    const header = Buffer.alloc(8);
+    header.writeUInt32LE(opcode, 0);
+    header.writeUInt32LE(body.length, 4);
+    sock.write(Buffer.concat([header, body]));
+}
+
+function rpcSetActivity(): void {
+    const cfg = rpcConfig;
+    if (!cfg?.appId) return;
+    const assets: Record<string, string> = {};
+    if (cfg.largeImage) assets.large_image = cfg.largeImage;
+    if (cfg.largeText) assets.large_text = cfg.largeText;
+    if (cfg.smallImage) assets.small_image = cfg.smallImage;
+    if (cfg.smallText) assets.small_text = cfg.smallText;
+    const activity: Record<string, unknown> = { type: 0 };
+    if (cfg.details) activity.details = cfg.details;
+    if (cfg.state) activity.state = cfg.state;
+    if (Object.keys(assets).length) activity.assets = assets;
+    if (cfg.elapsed) activity.timestamps = { start: Math.floor(Date.now() / 1000) };
+    rpcNonce += 1;
+    rpcSend(1, {
+        cmd: "SET_ACTIVITY",
+        args: { pid: process.pid, activity },
+        nonce: String(rpcNonce),
+    });
+}
+
+function rpcConnect(): void {
+    const cfg = rpcConfig;
+    if (!cfg?.appId || rpcSocket || rpcConnecting) return;
+    rpcConnecting = true;
+    const sock = net.connect(RPC_PIPE);
+    rpcSocket = sock;
+    sock.on("connect", () => {
+        rpcConnecting = false;
+        rpcSend(0, { v: 1, client_id: cfg.appId });
+        rpcSetActivity();
+        log(`rpc: connected to ${RPC_PIPE}`);
+        if (rpcResendTimer) clearInterval(rpcResendTimer);
+        rpcResendTimer = setInterval(rpcSetActivity, RPC_RESEND_MS);
+        if (rpcRetryTimer) {
+            clearTimeout(rpcRetryTimer);
+            rpcRetryTimer = null;
+        }
+    });
+    sock.on("error", (e) => {
+        log(`rpc: socket error: ${e.message}`);
+    });
+    sock.on("close", () => {
+        rpcSocket = null;
+        rpcConnecting = false;
+        if (rpcResendTimer) {
+            clearInterval(rpcResendTimer);
+            rpcResendTimer = null;
+        }
+        // Discord may restart — retry while a config is still active.
+        if (rpcConfig?.appId && !rpcRetryTimer) {
+            rpcRetryTimer = setTimeout(() => {
+                rpcRetryTimer = null;
+                rpcConnect();
+            }, RPC_RETRY_MS);
+        }
+    });
+}
+
+function rpcSet(cfg: unknown): void {
+    if (!cfg || typeof cfg !== "object") return;
+    const c = cfg as Record<string, unknown>;
+    const appId = typeof c.appId === "string" ? c.appId.trim() : "";
+    if (!/^\d{5,25}$/.test(appId)) {
+        log("rpc: rejected — appId must be a numeric Discord application id");
+        return;
+    }
+    const str = (k: string) => (typeof c[k] === "string" ? (c[k] as string) : undefined);
+    rpcConfig = {
+        appId,
+        details: str("details"),
+        state: str("state"),
+        largeImage: str("largeImage"),
+        largeText: str("largeText"),
+        smallImage: str("smallImage"),
+        smallText: str("smallText"),
+        elapsed: c.elapsed === true,
+    };
+    rpcConnect();
+    rpcSetActivity();
+}
+
+function rpcClear(): void {
+    rpcConfig = null;
+    if (rpcResendTimer) {
+        clearInterval(rpcResendTimer);
+        rpcResendTimer = null;
+    }
+    if (rpcRetryTimer) {
+        clearTimeout(rpcRetryTimer);
+        rpcRetryTimer = null;
+    }
+    const sock = rpcSocket;
+    rpcSocket = null;
+    rpcConnecting = false;
+    if (sock && !sock.destroyed) {
+        // Best-effort activity clear, then hang up.
+        rpcNonce += 1;
+        const body = Buffer.from(
+            JSON.stringify({
+                cmd: "SET_ACTIVITY",
+                args: { pid: process.pid, activity: {} },
+                nonce: String(rpcNonce),
+            }),
+            "utf8",
+        );
+        const header = Buffer.alloc(8);
+        header.writeUInt32LE(1, 0);
+        header.writeUInt32LE(body.length, 4);
+        sock.write(Buffer.concat([header, body]), () => sock.destroy());
+    }
+}
+
 function registerIpc(): void {
     const { ipcMain } = electron;
 
@@ -338,6 +510,15 @@ function registerIpc(): void {
     ipcMain.handle("monocord:theme-get", (_e, name: string) => getThemeCss(name));
     ipcMain.handle("monocord:plugins-list", () => listPlugins());
     ipcMain.handle("monocord:plugin-get", (_e, name: string) => getPluginCode(name));
+
+    ipcMain.handle("monocord:rpc-set", (_e, cfg: unknown) => {
+        rpcSet(cfg);
+        return true;
+    });
+    ipcMain.handle("monocord:rpc-clear", () => {
+        rpcClear();
+        return true;
+    });
 
     // Renderer logs arrive via ipcRenderer.invoke — must be `handle`, not
     // `on`, or the renderer's promise never resolves and logs vanish.

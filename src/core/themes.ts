@@ -111,4 +111,17 @@ export const Themes = {
         setCss(CUSTOM_STYLE_ID, css);
         await Settings.set(SETTINGS_CUSTOM_CSS, css);
     },
+
+    /**
+     * Inject CSS owned by a plugin under a unique id. Independent of the
+     * active theme and custom CSS — several plugins can coexist.
+     */
+    injectCss(id: string, css: string): void {
+        setCss(`monocord-plugin-${id}`, css);
+    },
+
+    /** Remove CSS previously injected via `injectCss`. */
+    removeCss(id: string): void {
+        document.getElementById(`monocord-plugin-${id}`)?.remove();
+    },
 };

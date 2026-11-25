@@ -13,7 +13,9 @@ import { setLogLevel, setLogSink } from "../core/logger";
 import { IpcBackend, Settings, type MonocordBridge } from "../core/settings";
 import { setThemeBridge, Themes } from "../core/themes";
 import type { Plugin, PluginManifest, Theme } from "../core/types";
+import { registerExtras } from "../plugins/extras";
 import { registerExamples } from "../plugins/examples";
+import { CustomRPC } from "../plugins/custom-rpc";
 import { SETTINGS_PLUGIN_NAME, SettingsUIPlugin } from "../plugins/settings-ui";
 
 const log = Logger.get("renderer");
@@ -104,6 +106,12 @@ async function main(): Promise<void> {
     }
 
     registerExamples();
+    registerExtras();
+    try {
+        Api.Plugins.register(CustomRPC);
+    } catch (e) {
+        log.warn("CustomRPC already registered", e);
+    }
     try {
         Api.Plugins.register(SettingsUIPlugin);
     } catch (e) {

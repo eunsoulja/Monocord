@@ -232,7 +232,12 @@ function pluginRows(): { name: string; plugin: Plugin; enabled: boolean; running
 }
 
 export class PluginsPanel extends PanelBase {
-    override state: { rev: number } = { rev: 0 };
+    override state: {
+        rev: number;
+        openSettings: string | null;
+        drafts: Record<string, string>;
+        errors: Record<string, string>;
+    } = { rev: 0, openSettings: null, drafts: {}, errors: {} };
     private offs: (() => void)[] = [];
 
     componentDidMount(): void {
@@ -246,7 +251,70 @@ export class PluginsPanel extends PanelBase {
         this.offs = [];
     }
 
+    private settingKeys(plugin: Plugin): string[] {
+        return plugin.settings ? Object.keys(plugin.settings) : [];
+    }
+
+    private async loadDraft(name: string, plugin: Plugin): Promise<void> {
+        const values: Record<string, unknown> = {};
+        for (const key of this.settingKeys(plugin)) {
+            const v = await Settings.get(
+                `plugins.settings.${name}.${key}`,
+                plugin.settings?.[key],
+            );
+            values[key] = v ?? plugin.settings?.[key];
+        }
+        this.setState({
+            drafts: {
+                ...this.state.drafts,
+                [name]: JSON.stringify(values, null, 2),
+            },
+            errors: { ...this.state.errors, [name]: "" },
+        });
+    }
+
+    private toggleSettings(name: string, plugin: Plugin): void {
+        if (this.state.openSettings === name) {
+            this.setState({ openSettings: null });
+            return;
+        }
+        this.setState({ openSettings: name });
+        if (!this.state.drafts[name]) void this.loadDraft(name, plugin);
+    }
+
+    private saveSettings(name: string, plugin: Plugin): void {
+        const raw = this.state.drafts[name] ?? "";
+        let parsed: Record<string, unknown>;
+        try {
+            parsed = JSON.parse(raw) as Record<string, unknown>;
+        } catch (e) {
+            this.setState({
+                errors: {
+                    ...this.state.errors,
+                    [name]: `Invalid JSON: ${String(e)}`,
+                },
+            });
+            return;
+        }
+        void (async () => {
+            for (const key of this.settingKeys(plugin)) {
+                if (key in parsed) {
+                    await Settings.set(
+                        `plugins.settings.${name}.${key}`,
+                        parsed[key],
+                    );
+                }
+            }
+            this.setState({
+                errors: { ...this.state.errors, [name]: "" },
+                drafts: { ...this.state.drafts, [name]: "" },
+            });
+            void this.loadDraft(name, plugin);
+        })();
+    }
+
     override render(): unknown {
+        const { openSettings, drafts, errors } = this.state;
         const rows = pluginRows();
 
     return h(
@@ -255,8 +323,10 @@ export class PluginsPanel extends PanelBase {
         h("h2", { style: S.h2 }, "Plugins"),
         rows.length === 0
             ? h("div", { style: S.muted }, "No plugins registered.")
-            : rows.map(({ name, plugin, enabled }) =>
-                  h(
+            : rows.map(({ name, plugin, enabled }) => {
+                  const keys = this.settingKeys(plugin);
+                  const open = openSettings === name;
+                  return h(
                       "div",
                       { key: name, style: S.card },
                       h(
@@ -272,23 +342,86 @@ export class PluginsPanel extends PanelBase {
                               h("div", { style: S.muted }, plugin.description ?? ""),
                           ),
                           h(
-                              "button",
-                              {
-                                  style: enabled ? S.btnOff : S.btn,
-                                  onClick: () => {
-                                      const p = enabled
-                                          ? Api.Plugins.disable(name)
-                                          : Api.Plugins.enable(name);
-                                      void p.catch((e) =>
-                                          log.error(`toggle ${name} failed`, e),
-                                      );
+                              "div",
+                              { style: { display: "flex", gap: 8 } },
+                              keys.length > 0
+                                  ? h(
+                                        "button",
+                                        {
+                                            style: S.btnOff,
+                                            onClick: () =>
+                                                this.toggleSettings(name, plugin),
+                                        },
+                                        open ? "Hide settings" : "Settings",
+                                    )
+                                  : null,
+                              h(
+                                  "button",
+                                  {
+                                      style: enabled ? S.btnOff : S.btn,
+                                      onClick: () => {
+                                          const p = enabled
+                                              ? Api.Plugins.disable(name)
+                                              : Api.Plugins.enable(name);
+                                          void p.catch((e) =>
+                                              log.error(`toggle ${name} failed`, e),
+                                          );
+                                      },
                                   },
-                              },
-                              enabled ? "Disable" : "Enable",
+                                  enabled ? "Disable" : "Enable",
+                              ),
                           ),
                       ),
-                  ),
-              ),
+                      open
+                          ? h(
+                                "div",
+                                { style: { marginTop: 10 } },
+                                h("textarea", {
+                                    style: {
+                                        ...S.input,
+                                        minHeight: 110,
+                                        resize: "vertical",
+                                    },
+                                    value: drafts[name] ?? "",
+                                    placeholder: "{}",
+                                    onChange: (e: { target: { value: string } }) =>
+                                        this.setState({
+                                            drafts: {
+                                                ...this.state.drafts,
+                                                [name]: e.target.value,
+                                            },
+                                        }),
+                                }),
+                                h(
+                                    "div",
+                                    {
+                                        style: {
+                                            ...S.row,
+                                            marginTop: 8,
+                                            justifyContent: "flex-start",
+                                        },
+                                    },
+                                    h(
+                                        "button",
+                                        {
+                                            style: S.btn,
+                                            onClick: () =>
+                                                this.saveSettings(name, plugin),
+                                        },
+                                        "Save settings",
+                                    ),
+                                    errors[name]
+                                        ? h(
+                                              "span",
+                                              { style: { ...S.muted, color: "var(--status-danger,#f23f43)" } },
+                                              errors[name],
+                                          )
+                                        : null,
+                                ),
+                            )
+                          : null,
+                  );
+              }),
         );
     }
 }

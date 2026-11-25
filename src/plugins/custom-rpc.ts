@@ -46,19 +46,14 @@ const ASSET_PREFIXES = /^(?:gif|mp4|youtube|twitch|spotify|external|url):/i;
 
 /**
  * Normalize an image field for Discord: pass asset keys and pre-prefixed
- * values through untouched, and auto-prefix direct .gif URLs with `gif:`
- * so animated images actually animate in the presence.
+ * values through untouched, and wrap direct http(s) URLs as
+ * `mp:external/<url>` — Discord's documented form for external activity
+ * assets (what fetchAssetIds would resolve them to anyway).
  */
 function assetValue(raw: string): string {
     const v = raw.trim();
     if (!v || ASSET_PREFIXES.test(v)) return v;
-    if (
-        /^https?:\/\//i.test(v) &&
-        (/\.gif($|\?)/i.test(v) ||
-            /media\.tenor\.com|i\.giphy\.com/i.test(v))
-    ) {
-        return `gif:${v}`;
-    }
+    if (/^https?:\/\//i.test(v)) return `mp:external/${v}`;
     return v;
 }
 

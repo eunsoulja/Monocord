@@ -331,6 +331,20 @@ export class PluginsPanel extends PanelBase {
     componentWillUnmount(): void {
         this.offs.forEach((off) => off());
         this.offs = [];
+        // Flush debounced setting writes so the last keystrokes aren't lost.
+        for (const [tkey, timer] of this.persistTimers) {
+            clearTimeout(timer);
+            const dot = tkey.indexOf(".");
+            const name = tkey.slice(0, dot);
+            const key = tkey.slice(dot + 1);
+            const value = this.state.values[name]?.[key];
+            if (value !== undefined) {
+                void Settings.set(`plugins.settings.${name}.${key}`, value).catch(
+                    () => {},
+                );
+            }
+        }
+        this.persistTimers.clear();
     }
 
     private settingKeys(plugin: Plugin): string[] {
@@ -356,6 +370,10 @@ export class PluginsPanel extends PanelBase {
         });
     }
 
+    // Debounce settings.json writes — custom views (e.g. CustomRPC) call
+    // set() per keystroke, and each write is a full-document IPC save.
+    private persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
     private setSetting(
         name: string,
         key: string,
@@ -366,8 +384,17 @@ export class PluginsPanel extends PanelBase {
         this.setState({
             values: { ...this.state.values, [name]: { ...cur, [key]: value } },
         });
-        void Settings.set(`plugins.settings.${name}.${key}`, value).catch(
-            (e) => log.error(`settings set ${name}.${key} failed`, e),
+        const tkey = `${name}.${key}`;
+        const prev = this.persistTimers.get(tkey);
+        if (prev) clearTimeout(prev);
+        this.persistTimers.set(
+            tkey,
+            setTimeout(() => {
+                this.persistTimers.delete(tkey);
+                void Settings.set(`plugins.settings.${name}.${key}`, value).catch(
+                    (e) => log.error(`settings set ${name}.${key} failed`, e),
+                );
+            }, 400),
         );
     }
 
@@ -552,6 +579,61 @@ export class PluginsPanel extends PanelBase {
 
     private renderSettingsBody(name: string, plugin: Plugin): unknown {
         const { drafts, errors } = this.state;
+        if (plugin.settingsView) {
+            const ctx = {
+                h,
+                values: this.state.values[name] ?? {},
+                set: (key: string, value: unknown) =>
+                    this.setSetting(name, key, value, plugin),
+                enabled: Api.Plugins.isEnabled(name),
+            };
+            return h(
+                "div",
+                { style: { marginTop: 14 } },
+                plugin.settingsView(ctx),
+                // Escape hatch: raw JSON editor for power users.
+                h(
+                    "details",
+                    { style: { marginTop: 14 } },
+                    h("summary", { style: S.muted }, "Advanced: raw JSON"),
+                    h("textarea", {
+                        style: {
+                            ...S.input,
+                            minHeight: 120,
+                            resize: "vertical",
+                            marginTop: 8,
+                        },
+                        value: drafts[name] ?? "",
+                        placeholder: "{}",
+                        onChange: (e: { target: { value: string } }) =>
+                            this.setState({
+                                drafts: {
+                                    ...this.state.drafts,
+                                    [name]: e.target.value,
+                                },
+                            }),
+                    }),
+                    h(
+                        "div",
+                        {
+                            style: {
+                                ...S.row,
+                                marginTop: 8,
+                                justifyContent: "flex-start",
+                            },
+                        },
+                        h(
+                            "button",
+                            {
+                                style: S.btnOff,
+                                onClick: () => this.saveSettings(name, plugin),
+                            },
+                            "Save JSON",
+                        ),
+                    ),
+                ),
+            );
+        }
         if (plugin.settingsSchema) {
             return h(
                 "div",

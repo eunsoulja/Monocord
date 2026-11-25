@@ -27,10 +27,28 @@ export interface Plugin {
      * editor. Keys should match entries in `settings`.
      */
     settingsSchema?: Record<string, SettingField>;
+    /**
+     * Optional fully custom settings renderer. When present it replaces the
+     * generic `settingsSchema` form — use for plugins needing paired
+     * fields, validation, or live previews (e.g. CustomRPC).
+     */
+    settingsView?: (ctx: PluginSettingsViewContext) => unknown;
     /** Called when the plugin is enabled. Throwing is caught and reported. */
     start?(): void | Promise<void>;
     /** Called when the plugin is disabled. Must undo everything `start` did. */
     stop?(): void | Promise<void>;
+}
+
+/** Context passed to `Plugin.settingsView` custom settings renderers. */
+export interface PluginSettingsViewContext {
+    /** createElement bound to Discord's React (same as ui/react `h`). */
+    h: (type: unknown, props?: unknown, ...children: unknown[]) => unknown;
+    /** Current persisted setting values for this plugin (key → value). */
+    values: Record<string, unknown>;
+    /** Persist one setting key (fires settings.changed → live update). */
+    set: (key: string, value: unknown) => void;
+    /** Whether the plugin is currently enabled. */
+    enabled: boolean;
 }
 
 /** A single typed setting rendered by the plugins panel. */

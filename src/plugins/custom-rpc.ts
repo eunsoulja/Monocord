@@ -74,6 +74,13 @@ type FetchAssetIds = (appId: string, keys: string[]) => Promise<string[]>;
 let assetUtilsTried = false;
 let fetchAssetIds: FetchAssetIds | null = null;
 let assetUtilsWarned = false;
+const loggedAssets = new Set<string>();
+
+function logAsset(msg: string): void {
+    if (loggedAssets.has(msg)) return;
+    loggedAssets.add(msg);
+    log.info(msg);
+}
 
 /**
  * Locate Discord's ApplicationAssetUtils module (mangled exports) and pull
@@ -127,7 +134,10 @@ async function resolveAsset(
         try {
             const ids = await fetch(appId, [key]);
             const id = ids?.[0];
-            if (typeof id === "string" && id) return id;
+            if (typeof id === "string" && id) {
+                logAsset(`asset resolved: ${key.slice(0, 80)} -> ${id.slice(0, 120)}`);
+                return id;
+            }
         } catch (e) {
             if (!assetUtilsWarned) {
                 assetUtilsWarned = true;
@@ -135,7 +145,9 @@ async function resolveAsset(
             }
         }
     }
-    return assetValue(key);
+    const fallback = assetValue(key);
+    logAsset(`asset fallback (unresolved): ${key.slice(0, 80)} -> ${fallback.slice(0, 120)}`);
+    return fallback;
 }
 
 const FIELDS = [

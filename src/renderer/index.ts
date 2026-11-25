@@ -16,6 +16,8 @@ import type { Plugin, PluginManifest, Theme } from "../core/types";
 import { registerExtras } from "../plugins/extras";
 import { registerExamples } from "../plugins/examples";
 import { CustomRPC } from "../plugins/custom-rpc";
+import { registerMods } from "../plugins/mods";
+import { registerUxExtras } from "../plugins/ux-extras";
 import { SETTINGS_PLUGIN_NAME, SettingsUIPlugin } from "../plugins/settings-ui";
 
 const log = Logger.get("renderer");
@@ -107,6 +109,8 @@ async function main(): Promise<void> {
 
     registerExamples();
     registerExtras();
+    registerUxExtras();
+    registerMods();
     try {
         Api.Plugins.register(CustomRPC);
     } catch (e) {

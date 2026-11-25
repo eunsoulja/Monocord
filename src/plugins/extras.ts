@@ -10,7 +10,7 @@ import type { Plugin } from "../core/types";
 
 const log = Logger.get("extras");
 
-function cssPlugin(name: string, description: string, css: string): Plugin {
+export function cssPlugin(name: string, description: string, css: string): Plugin {
     const styleId = name.toLowerCase();
     return {
         name,

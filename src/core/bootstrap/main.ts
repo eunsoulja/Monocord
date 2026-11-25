@@ -33,6 +33,7 @@ const SETTINGS_FILE = path.join(DATA_DIR, "renderer-settings.json");
 const THEMES_DIR = path.join(DATA_DIR, "themes");
 const PLUGINS_DIR = path.join(DATA_DIR, "plugins");
 const LOG_FILE = path.join(DATA_DIR, "logs", "renderer.log");
+const LOG_DIR = path.dirname(LOG_FILE);
 const RENDERER_FILE = path.join(DIST_DIR, "renderer.js");
 const PRELOAD_FILE = path.join(DIST_DIR, "preload.js");
 
@@ -90,10 +91,99 @@ interface BrowserWindowOptions {
 let PatchedBrowserWindow: (new (options?: BrowserWindowOptions) => object) | null =
     null;
 
+let badgeBlocked = false;
+let trackBlockHandler: ((
+    details: { url: string },
+    callback: (response: { cancel?: boolean }) => void,
+) => void) | null = null;
+
+const TRACKING_HOSTS = [
+    "science.discord.com",
+    "sentry.io",
+    "ingest.sentry.io",
+    "ingest.us.sentry.io",
+];
+
+function isTrackingUrl(url: string): boolean {
+    try {
+        const host = new URL(url).hostname;
+        return TRACKING_HOSTS.some(
+            (h) => host === h || host.endsWith(`.${h}`),
+        );
+    } catch {
+        return false;
+    }
+}
+
+interface WebRequestLike {
+    onBeforeRequest(
+        listener:
+            | ((
+                  details: { url: string },
+                  callback: (response: { cancel?: boolean }) => void,
+              ) => void)
+            | null,
+    ): void;
+}
+
+function setTrackBlocking(on: boolean): void {
+    const ses = (
+        electron as unknown as {
+            session?: { defaultSession?: { webRequest?: WebRequestLike } };
+        }
+    ).session?.defaultSession;
+    if (!ses?.webRequest) return;
+    if (on && !trackBlockHandler) {
+        trackBlockHandler = (details, callback) => {
+            callback({ cancel: isTrackingUrl(details.url) });
+        };
+        ses.webRequest.onBeforeRequest(trackBlockHandler);
+        log("tracking endpoints blocked");
+    } else if (!on && trackBlockHandler) {
+        ses.webRequest.onBeforeRequest(null);
+        trackBlockHandler = null;
+        log("tracking block removed");
+    }
+}
+
+function setBadgeBlocking(on: boolean): void {
+    badgeBlocked = on;
+    log(`taskbar badge ${on ? "blocked" : "restored"}`);
+}
+
+const appProxyCache = new WeakMap<object, Record<string, unknown>>();
+
+function appWithBadgeBlock(appObj: Record<string, unknown>): Record<string, unknown> {
+    const cached = appProxyCache.get(appObj);
+    if (cached) return cached;
+    const real = appObj.setBadgeCount;
+    if (typeof real !== "function") return appObj;
+    const proxied = new Proxy(appObj, {
+        get(target, prop, receiver) {
+            if (prop === "setBadgeCount") {
+                return (count?: number) => {
+                    if (badgeBlocked) return;
+                    return (real as (c?: number) => void).call(target, count);
+                };
+            }
+            return Reflect.get(target, prop, receiver);
+        },
+    });
+    appProxyCache.set(appObj, proxied);
+    return proxied;
+}
+
 function makeElectronProxy(real: Record<string, unknown>): Record<string, unknown> {
     const handler: ProxyHandler<Record<string, unknown>> = {
         get(target, prop, receiver) {
             if (prop === "BrowserWindow") return PatchedBrowserWindow;
+            if (prop === "app") {
+                const appObj = Reflect.get(target, prop, receiver);
+                if (appObj && typeof appObj === "object") {
+                    return appWithBadgeBlock(appObj as Record<string, unknown>);
+                }
+                return appObj;
+            }
             if (prop === "default") {
                 const d = target.default;
                 if (d && typeof d === "object") {
@@ -491,6 +581,28 @@ function rpcClear(): void {
     }
 }
 
+const MSGLOG_PATH = path.join(LOG_DIR, "messages.jsonl");
+const MSGLOG_MAX_BYTES = 5 * 1024 * 1024;
+
+function appendMessageLog(line: unknown): void {
+    try {
+        if (typeof line !== "string" || line.length === 0 || line.length > 64 * 1024) {
+            return;
+        }
+        try {
+            const stat = fs.statSync(MSGLOG_PATH);
+            if (stat.size > MSGLOG_MAX_BYTES) {
+                fs.renameSync(MSGLOG_PATH, `${MSGLOG_PATH}.1`);
+            }
+        } catch {
+            // file doesn't exist yet
+        }
+        fs.appendFileSync(MSGLOG_PATH, `${line}\n`, "utf8");
+    } catch (e) {
+        log(`msglog write failed: ${String(e)}`);
+    }
+}
+
 function registerIpc(): void {
     const { ipcMain } = electron;
 
@@ -517,6 +629,19 @@ function registerIpc(): void {
     });
     ipcMain.handle("monocord:rpc-clear", () => {
         rpcClear();
+        return true;
+    });
+
+    ipcMain.handle("monocord:msglog", (_e, line: unknown) => {
+        appendMessageLog(line);
+        return true;
+    });
+    ipcMain.handle("monocord:track-block", (_e, on: unknown) => {
+        setTrackBlocking(on === true);
+        return true;
+    });
+    ipcMain.handle("monocord:badge-block", (_e, on: unknown) => {
+        setBadgeBlocking(on === true);
         return true;
     });
 

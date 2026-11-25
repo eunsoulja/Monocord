@@ -91,7 +91,6 @@ interface BrowserWindowOptions {
 let PatchedBrowserWindow: (new (options?: BrowserWindowOptions) => object) | null =
     null;
 
-let badgeBlocked = false;
 let trackBlockHandler: ((
     details: { url: string },
     callback: (response: { cancel?: boolean }) => void,
@@ -146,44 +145,28 @@ function setTrackBlocking(on: boolean): void {
     }
 }
 
+let badgeOriginal: unknown = null;
+
 function setBadgeBlocking(on: boolean): void {
-    badgeBlocked = on;
-    log(`taskbar badge ${on ? "blocked" : "restored"}`);
-}
-
-const appProxyCache = new WeakMap<object, Record<string, unknown>>();
-
-function appWithBadgeBlock(appObj: Record<string, unknown>): Record<string, unknown> {
-    const cached = appProxyCache.get(appObj);
-    if (cached) return cached;
-    const real = appObj.setBadgeCount;
-    if (typeof real !== "function") return appObj;
-    const proxied = new Proxy(appObj, {
-        get(target, prop, receiver) {
-            if (prop === "setBadgeCount") {
-                return (count?: number) => {
-                    if (badgeBlocked) return;
-                    return (real as (c?: number) => void).call(target, count);
-                };
-            }
-            return Reflect.get(target, prop, receiver);
-        },
-    });
-    appProxyCache.set(appObj, proxied);
-    return proxied;
+    const appObj = electron.app as unknown as Record<string, unknown>;
+    try {
+        if (on) {
+            if (badgeOriginal === null) badgeOriginal = appObj.setBadgeCount;
+            appObj.setBadgeCount = () => {};
+        } else if (badgeOriginal !== null) {
+            appObj.setBadgeCount = badgeOriginal;
+            badgeOriginal = null;
+        }
+        log(`taskbar badge ${on ? "blocked" : "restored"}`);
+    } catch (e) {
+        log(`badge block failed: ${String(e)}`);
+    }
 }
 
 function makeElectronProxy(real: Record<string, unknown>): Record<string, unknown> {
     const handler: ProxyHandler<Record<string, unknown>> = {
         get(target, prop, receiver) {
             if (prop === "BrowserWindow") return PatchedBrowserWindow;
-            if (prop === "app") {
-                const appObj = Reflect.get(target, prop, receiver);
-                if (appObj && typeof appObj === "object") {
-                    return appWithBadgeBlock(appObj as Record<string, unknown>);
-                }
-                return appObj;
-            }
             if (prop === "default") {
                 const d = target.default;
                 if (d && typeof d === "object") {

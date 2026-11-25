@@ -22,6 +22,7 @@ import { registerSocial3 } from "../plugins/social3";
 import { registerSystem3 } from "../plugins/system3";
 import { registerUxExtras } from "../plugins/ux-extras";
 import { registerVencordLate } from "../plugins/vencord-late";
+import { registerVencordLast } from "../plugins/vencord-last";
 import { SETTINGS_PLUGIN_NAME, SettingsUIPlugin } from "../plugins/settings-ui";
 
 const log = Logger.get("renderer");
@@ -119,6 +120,7 @@ async function main(): Promise<void> {
     registerSocial3();
     registerSystem3();
     registerVencordLate();
+    registerVencordLast();
     try {
         Api.Plugins.register(CustomRPC);
     } catch (e) {

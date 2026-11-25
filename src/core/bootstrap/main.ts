@@ -852,19 +852,27 @@ const MSGLOG_PATH = path.join(LOG_DIR, "messages.jsonl");
 const MSGLOG_MAX_BYTES = 5 * 1024 * 1024;
 
 function appendMessageLog(line: unknown): void {
+    // Accepts a single JSONL string or an array of them (batched flushes).
+    const lines = Array.isArray(line) ? line : [line];
     try {
-        if (typeof line !== "string" || line.length === 0 || line.length > 64 * 1024) {
-            return;
-        }
-        try {
-            const stat = fs.statSync(MSGLOG_PATH);
-            if (stat.size > MSGLOG_MAX_BYTES) {
-                fs.renameSync(MSGLOG_PATH, `${MSGLOG_PATH}.1`);
+        let rotated = false;
+        for (const l of lines) {
+            if (typeof l !== "string" || l.length === 0 || l.length > 64 * 1024) {
+                continue;
             }
-        } catch {
-            // file doesn't exist yet
+            if (!rotated) {
+                rotated = true;
+                try {
+                    const stat = fs.statSync(MSGLOG_PATH);
+                    if (stat.size > MSGLOG_MAX_BYTES) {
+                        fs.renameSync(MSGLOG_PATH, `${MSGLOG_PATH}.1`);
+                    }
+                } catch {
+                    // file doesn't exist yet
+                }
+            }
+            fs.appendFileSync(MSGLOG_PATH, `${l}\n`, "utf8");
         }
-        fs.appendFileSync(MSGLOG_PATH, `${line}\n`, "utf8");
     } catch (e) {
         log(`msglog write failed: ${String(e)}`);
     }

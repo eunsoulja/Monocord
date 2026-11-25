@@ -52,8 +52,41 @@ function ensureStyle(id: string): HTMLStyleElement {
 }
 
 function setCss(id: string, css: string): void {
-    ensureStyle(id).textContent = css;
+    const el = ensureStyle(id);
+    // Constructable stylesheets skip the <style> text parse and are cheaper
+    // to swap, but replaceSync rejects @import — fall back for those.
+    if (!/^\s*@import/m.test(css) && "adoptedStyleSheets" in document) {
+        let sheet = adoptedSheets.get(id);
+        if (!sheet) {
+            sheet = new CSSStyleSheet();
+            adoptedSheets.set(id, sheet);
+            document.adoptedStyleSheets = [
+                ...document.adoptedStyleSheets.filter((s) => s !== sheet),
+                sheet,
+            ];
+        }
+        try {
+            sheet.replaceSync(css);
+            el.textContent = "";
+            return;
+        } catch {
+            // fall through to <style>
+        }
+    }
+    detachAdopted(id);
+    el.textContent = css;
 }
+
+function detachAdopted(id: string): void {
+    const sheet = adoptedSheets.get(id);
+    if (!sheet) return;
+    adoptedSheets.delete(id);
+    document.adoptedStyleSheets = document.adoptedStyleSheets.filter(
+        (s) => s !== sheet,
+    );
+}
+
+const adoptedSheets = new Map<string, CSSStyleSheet>();
 
 /** Extract @import rules so they can be hoisted to the top of the sheet. */
 function splitImports(css: string): { imports: string[]; body: string } {
@@ -213,6 +246,7 @@ export const Themes = {
 
     /** Remove CSS previously injected via `injectCss`. */
     removeCss(id: string): void {
+        detachAdopted(`monocord-plugin-${id}`);
         document.getElementById(`monocord-plugin-${id}`)?.remove();
     },
 };

@@ -133,10 +133,26 @@ const MessageLogger: Plugin = {
             };
         };
 
+        // Buffer log lines and flush in batches — a busy channel would
+        // otherwise do one IPC round-trip per edited/deleted message.
+        const pending: string[] = [];
+        const flush = () => {
+            if (pending.length === 0) return;
+            const lines = pending.splice(0, pending.length);
+            void b.invoke("msglog", lines).catch(() => {});
+        };
+        const timer = setInterval(flush, 3000);
+        const onHide = () => flush();
+        window.addEventListener("pagehide", onHide);
+        (this as { __teardown?: () => void }).__teardown = () => {
+            clearInterval(timer);
+            window.removeEventListener("pagehide", onHide);
+            flush();
+        };
+
         const write = (record: Record<string, unknown>) => {
-            void b
-                .invoke("msglog", JSON.stringify({ ts: Date.now(), ...record }))
-                .catch(() => {});
+            pending.push(JSON.stringify({ ts: Date.now(), ...record }));
+            if (pending.length >= 100) flush();
         };
 
         dispatcher.subscribe((action) => {
@@ -196,6 +212,10 @@ const MessageLogger: Plugin = {
             }
         });
         log.info("message logger subscribed");
+    },
+
+    stop() {
+        (this as { __teardown?: () => void }).__teardown?.();
     },
 };
 

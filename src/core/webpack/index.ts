@@ -327,25 +327,45 @@ class WebpackFinder {
         return out;
     }
 
+    // Webpack's module table is stable after boot, so successful lookups
+    // are memoized — each uncached find scans and requires every module.
+    // Misses are NOT cached: Discord lazy-loads chunks, so a module absent
+    // now may appear later and a cached miss would hide it forever.
+    private findCache = new Map<string, unknown>();
+
+    private cached<T>(key: string, compute: () => T): T {
+        if (this.findCache.has(key)) return this.findCache.get(key) as T;
+        const v = compute();
+        if (v !== undefined) this.findCache.set(key, v);
+        return v;
+    }
+
     /**
      * Find a module whose exports (or `exports.default`) contain every
      * listed property.
      */
     findByProps(...props: string[]): unknown | undefined {
-        return this.find((exports) => hasProps(exports, props));
+        return this.cached(`props:${props.join("|")}`, () =>
+            this.find((exports) => hasProps(exports, props)),
+        );
     }
 
     /** Find all modules matching `findByProps`. */
     findAllByProps(...props: string[]): unknown[] {
-        return this.findAll((exports) => hasProps(exports, props));
+        const key = `allprops:${props.join("|")}`;
+        return this.cached(key, () =>
+            this.findAll((exports) => hasProps(exports, props)),
+        ) ?? [];
     }
 
     /** Find a module by `displayName` on exports or `exports.default`. */
     findByDisplayName(name: string): unknown | undefined {
-        return this.find(
-            (exports) =>
-                displayNameOf(exports) === name ||
-                (isObject(exports) && displayNameOf(exports.default) === name),
+        return this.cached(`display:${name}`, () =>
+            this.find(
+                (exports) =>
+                    displayNameOf(exports) === name ||
+                    (isObject(exports) && displayNameOf(exports.default) === name),
+            ),
         );
     }
 
@@ -359,12 +379,14 @@ class WebpackFinder {
     /** Clear memoized exports (e.g. after a Discord reload). */
     invalidate(): void {
         this.exportCache.clear();
+        this.findCache.clear();
     }
 
     /** Drop the captured require entirely — next ensure() re-probes. */
     reset(): void {
         this.req = null;
         this.exportCache.clear();
+        this.findCache.clear();
         this.warnedNoChunk = false;
         this.factoryPatches = [];
     }

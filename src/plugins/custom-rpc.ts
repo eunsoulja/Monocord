@@ -431,7 +431,30 @@ function val0(ctx: PluginSettingsViewContext, key: string): unknown {
     return ctx.values[key] ?? CustomRPC.settings?.[key];
 }
 
-let dispatcher: Dispatcher | null | undefined;
+let dispatcher: Dispatcher | null = null;
+let dispatcherPoll: ReturnType<typeof setInterval> | null = null;
+
+/** Poll for the flux dispatcher — Discord lazy-loads it after boot. */
+function ensureDispatcher(): void {
+    if (dispatcher?.dispatch || dispatcherPoll) return;
+    let attempts = 0;
+    dispatcherPoll = setInterval(() => {
+        attempts += 1;
+        const d = findDispatcher();
+        if (d?.dispatch) {
+            dispatcher = d;
+            if (dispatcherPoll) clearInterval(dispatcherPoll);
+            dispatcherPoll = null;
+            log.info("flux dispatcher found — LOCAL_ACTIVITY_UPDATE active");
+            void pushConfig();
+        } else if (attempts >= 60) {
+            // ~2 minutes — give up, IPC fallback remains.
+            if (dispatcherPoll) clearInterval(dispatcherPoll);
+            dispatcherPoll = null;
+            log.warn("flux dispatcher not found — IPC fallback only");
+        }
+    }, 2000);
+}
 
 let warnedMissingAppId = false;
 
@@ -453,14 +476,7 @@ async function pushConfig(): Promise<void> {
 
     // Primary path: Discord's own flux dispatcher (full feature set —
     // buttons, urls, party). Dispatch null to clear.
-    if (dispatcher === undefined) {
-        dispatcher = findDispatcher();
-        log.info(
-            dispatcher?.dispatch
-                ? "flux dispatcher found — LOCAL_ACTIVITY_UPDATE active"
-                : "flux dispatcher NOT found — IPC fallback only",
-        );
-    }
+    ensureDispatcher();
     if (dispatcher?.dispatch) {
         dispatcher.dispatch({
             type: "LOCAL_ACTIVITY_UPDATE",
@@ -861,6 +877,10 @@ export const CustomRPC: Plugin = {
     },
 
     async stop() {
+        if (dispatcherPoll) {
+            clearInterval(dispatcherPoll);
+            dispatcherPoll = null;
+        }
         const s = await readSettings();
         const activity = buildActivity(s);
         if (activity && dispatcher?.dispatch) {
@@ -870,6 +890,7 @@ export const CustomRPC: Plugin = {
                 socketId: "CustomRPC",
             });
         }
+        dispatcher = null;
         const b = bridge();
         if (b) await b.invoke("rpc-clear").catch(() => {});
     },

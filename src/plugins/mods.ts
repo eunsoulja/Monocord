@@ -31,9 +31,14 @@ export interface Dispatcher {
 }
 
 export function findDispatcher(): Dispatcher | null {
-    // Discord's real FluxDispatcher is identifiable by its internals —
-    // _actionHandlers/_subscriptions/_isFlushing — not just subscribe+dispatch
-    // (stores and event emitters match the loose shape too).
+    const isDispatcher = (o: unknown): o is Dispatcher =>
+        isObj(o) &&
+        typeof (o as unknown as Dispatcher).subscribe === "function" &&
+        typeof (o as unknown as Dispatcher).dispatch === "function";
+
+    // Vencord's approach: the FluxDispatcher module's exports ARE the
+    // dispatcher — modules with dispatch+subscribe props. Several may
+    // match, so score by FluxDispatcher internals and keep the best.
     const score = (o: unknown): number => {
         if (!isObj(o)) return 0;
         const d = o as unknown as Record<string, unknown>;
@@ -47,23 +52,31 @@ export function findDispatcher(): Dispatcher | null {
         if (typeof d.waitFor === "function") s += 1;
         return s;
     };
-    const looksLike = (o: unknown): o is Dispatcher => score(o) >= 3;
-    const found = Api.Webpack.findAll((exp) => {
-        if (looksLike(exp)) return true;
-        if (isObj(exp) && looksLike(exp.default)) return true;
-        return false;
-    });
+
     let best: Dispatcher | null = null;
     let bestScore = 0;
-    for (const exp of found) {
-        const candidates = [exp, isObj(exp) ? exp.default : undefined];
-        for (const c of candidates) {
-            const s = score(c);
-            if (s > bestScore && looksLike(c)) {
-                bestScore = s;
-                best = c as Dispatcher;
-            }
+    const consider = (c: unknown) => {
+        if (!isDispatcher(c)) return;
+        const s = score(c);
+        if (s > bestScore) {
+            bestScore = s;
+            best = c;
         }
+    };
+    for (const exp of Api.Webpack.findAllByProps("dispatch", "subscribe")) {
+        consider(exp);
+        if (isObj(exp)) consider(exp.default);
+    }
+    if (best) return best;
+
+    // Last resort: any dispatcher-shaped export anywhere.
+    for (const exp of Api.Webpack.findAll((e) => {
+        if (isDispatcher(e)) return true;
+        return isObj(e) && isDispatcher(e.default);
+    })) {
+        consider(exp);
+        if (isObj(exp)) consider(exp.default);
+        if (best) break;
     }
     return best;
 }

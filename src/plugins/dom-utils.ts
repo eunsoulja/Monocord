@@ -13,6 +13,53 @@ export function onDomReady(cb: () => void): void {
     }
 }
 
+interface DomWatcher {
+    selector: string;
+    cb: (el: Element) => void;
+    seen: WeakSet<Element>;
+}
+
+interface RootWatch {
+    observer: MutationObserver;
+    watchers: DomWatcher[];
+}
+
+// One MutationObserver per root shared by every observeAdded caller —
+// ~40 plugins each had their own observer firing on every DOM mutation.
+const rootWatches = new WeakMap<ParentNode, RootWatch>();
+
+function ensureRootWatch(root: ParentNode): RootWatch {
+    let watch = rootWatches.get(root);
+    if (!watch) {
+        const watchers: DomWatcher[] = [];
+        const scanNode = (node: Element) => {
+            for (const w of watchers) {
+                if (node.matches(w.selector) && !w.seen.has(node)) {
+                    w.seen.add(node);
+                    w.cb(node);
+                }
+                node.querySelectorAll(w.selector).forEach((el) => {
+                    if (!w.seen.has(el)) {
+                        w.seen.add(el);
+                        w.cb(el);
+                    }
+                });
+            }
+        };
+        const observer = new MutationObserver((mutations) => {
+            for (const m of mutations) {
+                for (const node of m.addedNodes) {
+                    if (node instanceof Element) scanNode(node);
+                }
+            }
+        });
+        observer.observe(root as Node, { childList: true, subtree: true });
+        watch = { observer, watchers };
+        rootWatches.set(root, watch);
+    }
+    return watch;
+}
+
 /**
  * Observe `root` (default document.body) for additions matching `selector`.
  * `cb` fires for each new match. Returns a stop function.
@@ -22,33 +69,22 @@ export function observeAdded(
     cb: (el: Element) => void,
     root: ParentNode = document.body,
 ): () => void {
-    const seen = new WeakSet<Element>();
-    const scan = (scope: ParentNode) => {
-        scope.querySelectorAll(selector).forEach((el) => {
-            if (!seen.has(el)) {
-                seen.add(el);
-                cb(el);
-            }
-        });
-    };
-    scan(root);
-    const mo = new MutationObserver((mutations) => {
-        for (const m of mutations) {
-            for (const node of m.addedNodes) {
-                if (node instanceof Element) {
-                    if (node.matches(selector)) {
-                        if (!seen.has(node)) {
-                            seen.add(node);
-                            cb(node);
-                        }
-                    }
-                    scan(node);
-                }
-            }
-        }
+    const watch = ensureRootWatch(root);
+    const watcher: DomWatcher = { selector, cb, seen: new WeakSet() };
+    // Report elements already in the DOM, like the old per-plugin scan did.
+    root.querySelectorAll(selector).forEach((el) => {
+        watcher.seen.add(el);
+        cb(el);
     });
-    mo.observe(root, { childList: true, subtree: true });
-    return () => mo.disconnect();
+    watch.watchers.push(watcher);
+    return () => {
+        const i = watch.watchers.indexOf(watcher);
+        if (i >= 0) watch.watchers.splice(i, 1);
+        if (watch.watchers.length === 0) {
+            watch.observer.disconnect();
+            rootWatches.delete(root);
+        }
+    };
 }
 
 /** Delegated event listener; returns an unlisten function. */

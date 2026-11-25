@@ -183,11 +183,15 @@ export class OverviewPanel extends PanelBase {
         const enabledCount = Api.Plugins.names().filter((n) =>
             Api.Plugins.isEnabled(n),
         ).length;
+        const failedCount = Api.Plugins.getFailures().length;
         const stats: [string, string][] = [
             ["Framework", `v${Api.version}`],
             ["Discord", String(info?.discord ?? "unknown")],
             ["Host", "Electron"],
             ["Plugins", `${enabledCount} enabled / ${pluginCount}`],
+            ...(failedCount > 0
+                ? ([["Failed plugins", String(failedCount)]] as [string, string][])
+                : []),
             [
                 "Theme",
                 Themes.enabled.length === 0

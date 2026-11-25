@@ -12,6 +12,13 @@ export interface Plugin {
     version?: string;
     /** Names of plugins that must be enabled before this one starts. */
     required?: string[];
+    /**
+     * When true, the plugin is not started during the eager boot pass —
+     * it starts after `framework.ready`, in idle-time chunks. Use for
+     * plugins whose work (DOM observers, webpack scans) can wait a moment
+     * so Discord's own startup isn't competing with them.
+     */
+    defer?: boolean;
     /** Optional user-facing settings schema (key → default). */
     settings?: Record<string, unknown>;
     /**

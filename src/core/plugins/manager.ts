@@ -142,18 +142,53 @@ export class PluginManager {
     /** Enable every plugin marked enabled in settings, in dependency order. */
     async startEnabled(): Promise<void> {
         await Settings.ready();
+        await this.startMatching((p) => p.defer !== true);
+        this.started = true;
+    }
+
+    /**
+     * Start enabled plugins flagged `defer`, yielding to the event loop
+     * between each so Discord stays responsive while they install.
+     */
+    async startDeferred(): Promise<void> {
+        await this.startMatching((p) => p.defer === true, true);
+    }
+
+    /** Last start/stop error per plugin name, for diagnostics UI. */
+    private failures = new Map<string, unknown>();
+
+    /** Plugin names whose most recent lifecycle call threw. */
+    getFailures(): string[] {
+        return [...this.failures.keys()];
+    }
+
+    private async startMatching(
+        match: (plugin: Plugin) => boolean,
+        yieldBetween = false,
+    ): Promise<void> {
         const enabled = (await Settings.get<string[]>(SETTINGS_ENABLED, [])) ?? [];
         for (const name of this.topoOrder()) {
-            if (enabled.includes(name) && this.entries.get(name)?.enabled === false) {
-                try {
-                    await this.enable(name);
-                } catch (e) {
-                    log.error(`failed to enable ${name} at startup`, e);
-                    Events.emit("plugin.error", { name, phase: "start", error: e });
-                }
+            const entry = this.entries.get(name);
+            if (
+                !entry ||
+                entry.enabled !== false ||
+                !enabled.includes(name) ||
+                !match(entry.plugin)
+            ) {
+                continue;
+            }
+            try {
+                await this.enable(name);
+                this.failures.delete(name);
+            } catch (e) {
+                this.failures.set(name, e);
+                log.error(`failed to enable ${name} at startup`, e);
+                Events.emit("plugin.error", { name, phase: "start", error: e });
+            }
+            if (yieldBetween) {
+                await new Promise((r) => setTimeout(r, 0));
             }
         }
-        this.started = true;
     }
 
     /** Disable all running plugins (framework shutdown). */
@@ -193,12 +228,14 @@ export class PluginManager {
         entry.starting = true;
         try {
             await entry.plugin.start();
+            this.failures.delete(entry.plugin.name);
             Events.emit("plugin.started", { name: entry.plugin.name });
             log.info("started", { name: entry.plugin.name });
         } catch (e) {
             // A failed start leaves the plugin enabled-but-broken; mark
             // disabled so a retry is possible and the UI shows the truth.
             entry.enabled = false;
+            this.failures.set(entry.plugin.name, e);
             await this.persistEnabled();
             log.error(`start() failed for ${entry.plugin.name}`, e);
             Events.emit("plugin.error", {
@@ -225,6 +262,7 @@ export class PluginManager {
             // Patches must never survive a disabled plugin.
             const removed = Patcher.unpatchAll(entry.plugin.name);
             if (removed > 0) log.debug("removed leftover patches", { name: entry.plugin.name, removed });
+            this.failures.delete(entry.plugin.name);
             entry.scope.dispose();
             Events.emit("plugin.stopped", { name: entry.plugin.name });
         }

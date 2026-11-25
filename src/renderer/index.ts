@@ -132,6 +132,22 @@ async function main(): Promise<void> {
         log.warn("settings UI plugin already registered", e);
     }
     await loadExternalPlugins();
+
+    // Defer everything except infrastructure that must be live before
+    // Discord finishes booting (settings UI, privacy/RPC/logging).
+    const EAGER = new Set([
+        SETTINGS_PLUGIN_NAME,
+        "CustomRPC",
+        "NoTrack",
+        "MessageLogger",
+        "NoTypingIndicator",
+    ]);
+    for (const name of Api.Plugins.names()) {
+        if (EAGER.has(name)) continue;
+        const p = Api.Plugins.get(name);
+        if (p) p.defer = true;
+    }
+
     await Api.Plugins.startEnabled();
     // The settings UI is framework infrastructure — always on.
     if (!Api.Plugins.isEnabled(SETTINGS_PLUGIN_NAME)) {
@@ -143,6 +159,13 @@ async function main(): Promise<void> {
 
     Events.emit("framework.ready", { version: Api.version });
     log.info("framework ready");
+
+    // Deferred plugins install during idle time so Discord's own startup
+    // isn't competing with ~120 webpack scans and DOM observers.
+    const ric =
+        window.requestIdleCallback ??
+        ((cb: () => void) => setTimeout(cb, 200));
+    ric(() => void Api.Plugins.startDeferred());
 }
 
 void main().catch((e) => log.error("renderer bootstrap failed", e));

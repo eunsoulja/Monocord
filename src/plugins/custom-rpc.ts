@@ -41,6 +41,32 @@ const TIMESTAMP_MODES = [
     { label: "Custom start/end", value: "custom" },
 ] as const;
 
+/** Discord external-asset prefixes (Rich Presence docs). */
+const ASSET_PREFIXES = /^(?:gif|mp4|youtube|twitch|spotify|external|url):/i;
+
+/**
+ * Normalize an image field for Discord: pass asset keys and pre-prefixed
+ * values through untouched, and auto-prefix direct .gif URLs with `gif:`
+ * so animated images actually animate in the presence.
+ */
+function assetValue(raw: string): string {
+    const v = raw.trim();
+    if (!v || ASSET_PREFIXES.test(v)) return v;
+    if (
+        /^https?:\/\//i.test(v) &&
+        (/\.gif($|\?)/i.test(v) ||
+            /media\.tenor\.com|i\.giphy\.com/i.test(v))
+    ) {
+        return `gif:${v}`;
+    }
+    return v;
+}
+
+/** Strip a known external-asset prefix for preview rendering. */
+function previewAssetUrl(v: string): string {
+    return v.replace(/^(?:gif|mp4|youtube|twitch|spotify|external|url):/i, "");
+}
+
 const FIELDS = [
     "enabled", "appId", "appName",
     "details", "detailsUrl", "state", "stateUrl",
@@ -127,12 +153,12 @@ function buildActivity(s: Record<string, unknown>): Record<string, unknown> | nu
     const imageSmall = str("imageSmall");
     if (imageBig || imageSmall) {
         const assets: Record<string, string> = {};
-        if (imageBig) assets.large_image = imageBig;
+        if (imageBig) assets.large_image = assetValue(imageBig);
         const bigTip = str("imageBigTooltip");
         const bigUrl = str("imageBigUrl");
         if (bigTip) assets.large_text = bigTip;
         if (bigUrl) assets.large_url = bigUrl;
-        if (imageSmall) assets.small_image = imageSmall;
+        if (imageSmall) assets.small_image = assetValue(imageSmall);
         const smallTip = str("imageSmallTooltip");
         const smallUrl = str("imageSmallUrl");
         if (smallTip) assets.small_text = smallTip;
@@ -159,7 +185,11 @@ function toIpcActivity(activity: Record<string, unknown>): Record<string, unknow
         const clean: Record<string, string> = {};
         for (const key of ["large_image", "large_text", "small_image", "small_text"]) {
             const v = assets[key];
-            if (typeof v === "string" && v) clean[key] = v;
+            // The game IPC protocol doesn't know Discord's external-asset
+            // prefixes — strip them so plain URLs still resolve.
+            if (typeof v === "string" && v) {
+                clean[key] = previewAssetUrl(v);
+            }
         }
         out.assets = clean;
     }
@@ -183,8 +213,10 @@ function imageOrKey(
         objectFit: "cover",
         flexShrink: 0,
     };
-    if (/^https?:\/\//.test(key)) {
-        return h("img", { src: key, style, alt: "" });
+    // Strip Discord's external-asset prefixes (gif:, mp4:, …) for <img>.
+    const url = previewAssetUrl(key);
+    if (/^https?:\/\//.test(url)) {
+        return h("img", { src: url, style, alt: "" });
     }
     if (!key && appId) {
         // Discord app icon CDN — hide if it 404s.
@@ -718,6 +750,7 @@ export const CustomRPC: Plugin = {
                 : null,
 
             label("Images"),
+            hint("Paste a .gif URL (Imgur/Tenor/Giphy) and it animates automatically. You can also use Discord's prefixes: gif:, mp4:, youtube:, twitch:."),
             pair(
                 [
                     "Large image key/URL",

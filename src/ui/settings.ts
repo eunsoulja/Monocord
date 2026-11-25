@@ -132,6 +132,16 @@ const S = {
     } as Style,
 };
 
+function statusDot(enabled: boolean, running: boolean): unknown {
+    const cls = !enabled ? "off" : running ? "on" : "warn";
+    const tip = !enabled
+        ? "Disabled"
+        : running
+          ? "Enabled · running"
+          : "Enabled · not running";
+    return h("span", { className: `mc-status ${cls}`, title: tip });
+}
+
 function Badge(props: { ok: boolean; text: string }) {
     return h(
         "span",
@@ -178,6 +188,7 @@ export class OverviewPanel extends PanelBase {
             ["Discord", String(info?.discord ?? "unknown")],
             ["Host", "Electron"],
             ["Plugins", `${enabledCount} enabled / ${pluginCount}`],
+            ["Theme", Themes.active ?? "None"],
         ];
 
         return h(
@@ -244,9 +255,21 @@ const PLUGINS_CSS = `
 .mc-toggle.on{background:var(--status-positive,#23a55a);}
 .mc-toggle>span{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.4);}
 .mc-toggle.on>span{left:18px;}
-.mc-filters{display:flex;gap:8px;margin:10px 0 14px;}
-.mc-chip{background:var(--background-secondary,#2b2d31);border:1px solid var(--background-modifier-accent,#3f4147);color:var(--text-normal,#dbdee1);border-radius:16px;padding:5px 14px;font-size:13px;cursor:pointer;}
+.mc-filters{display:flex;gap:8px;margin:10px 0 14px;align-items:center;}
+.mc-chip{background:var(--background-secondary,#2b2d31);border:1px solid var(--background-modifier-accent,#3f4147);color:var(--text-normal,#dbdee1);border-radius:16px;padding:5px 14px;font-size:13px;cursor:pointer;transition:background .12s,border-color .12s,color .12s;}
+.mc-chip:hover{border-color:var(--brand-500,#5865f2);}
 .mc-chip.on{background:var(--brand-500,#5865f2);border-color:var(--brand-500,#5865f2);color:#fff;}
+.mc-chip .mc-count{opacity:.65;font-size:11px;margin-left:4px;}
+.mc-card-link{cursor:pointer;}
+.mc-card-link:focus-visible{outline:2px solid var(--brand-500,#5865f2);outline-offset:2px;}
+.mc-status{width:8px;height:8px;border-radius:50%;flex-shrink:0;display:inline-block;}
+.mc-status.on{background:var(--status-positive,#23a55a);box-shadow:0 0 6px rgba(35,165,90,.55);}
+.mc-status.warn{background:var(--status-warning,#f0b232);}
+.mc-status.off{background:var(--background-modifier-accent,#4e5058);}
+.mc-warn{background:var(--background-warning-solid,#59421e);border:1px solid var(--status-warning,#f0b232);border-radius:8px;padding:12px 14px;margin-bottom:12px;font-size:13px;line-height:18px;color:var(--text-normal,#dbdee1);}
+.mc-warn code{background:rgba(0,0,0,.25);border-radius:3px;padding:0 4px;font-family:var(--font-code,monospace);font-size:12px;}
+.mc-keys{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;}
+.mc-key{font-size:11px;color:var(--text-muted,#949ba4);border:1px solid var(--border-subtle,rgba(255,255,255,.08));border-radius:4px;padding:2px 6px;font-family:var(--font-code,monospace);}
 `;
 
 let pluginsCssInjected = false;
@@ -507,7 +530,10 @@ export class PluginsPanel extends PanelBase {
                 role: "switch",
                 "aria-checked": enabled,
                 title: enabled ? "Disable" : "Enable",
-                onClick: () => this.togglePlugin(name, enabled),
+                onClick: (e: { stopPropagation?: () => void }) => {
+                    e.stopPropagation?.();
+                    this.togglePlugin(name, enabled);
+                },
             },
             h("span", null),
         );
@@ -601,6 +627,7 @@ export class PluginsPanel extends PanelBase {
                     h(
                         "div",
                         { className: "mc-head-l" },
+                        statusDot(enabled, Api.Plugins.isRunning(name)),
                         h(
                             "div",
                             null,
@@ -670,6 +697,12 @@ export class PluginsPanel extends PanelBase {
             })
             .sort((a, b) => a.name.localeCompare(b.name));
 
+        const all = pluginRows();
+        const counts: Record<typeof filter, number> = {
+            all: all.length,
+            on: all.filter((r) => r.enabled).length,
+            off: all.filter((r) => !r.enabled).length,
+        };
         const chips: [typeof filter, string][] = [
             ["all", "All"],
             ["on", "Enabled"],
@@ -701,6 +734,7 @@ export class PluginsPanel extends PanelBase {
                             onClick: () => this.setState({ filter: value }),
                         },
                         label,
+                        h("span", { className: "mc-count" }, String(counts[value])),
                     ),
                 ),
             ),
@@ -709,13 +743,25 @@ export class PluginsPanel extends PanelBase {
                 : h(
                       "div",
                       { className: "mc-grid" },
-                      rows.map(({ name, plugin, enabled }) =>
+                      rows.map(({ name, plugin, enabled, running }) =>
                           h(
                               "div",
                               {
                                   key: name,
-                                  className: `mc-card${enabled ? "" : " mc-card-off"}`,
+                                  className: `mc-card mc-card-link${enabled ? "" : " mc-card-off"}`,
+                                  role: "button",
+                                  tabIndex: 0,
                                   title: plugin.description ?? name,
+                                  onClick: () => this.openDetail(name, plugin),
+                                  onKeyDown: (e: {
+                                      key: string;
+                                      preventDefault?: () => void;
+                                  }) => {
+                                      if (e.key === "Enter" || e.key === " ") {
+                                          e.preventDefault?.();
+                                          this.openDetail(name, plugin);
+                                      }
+                                  },
                               },
                               h(
                                   "div",
@@ -723,6 +769,7 @@ export class PluginsPanel extends PanelBase {
                                   h(
                                       "div",
                                       { className: "mc-head-l" },
+                                      statusDot(enabled, running),
                                       h(
                                           "div",
                                           null,
@@ -743,27 +790,6 @@ export class PluginsPanel extends PanelBase {
                                               : null,
                                       ),
                                   ),
-                                  this.settingKeys(plugin).length > 0
-                                      ? h(
-                                            "button",
-                                            {
-                                                className: "mc-icon-btn",
-                                                title: "Settings",
-                                                onClick: () =>
-                                                    this.openDetail(name, plugin),
-                                            },
-                                            "⚙",
-                                        )
-                                      : h(
-                                            "button",
-                                            {
-                                                className: "mc-icon-btn",
-                                                title: "Details",
-                                                onClick: () =>
-                                                    this.openDetail(name, plugin),
-                                            },
-                                            "ⓘ",
-                                        ),
                                   this.renderToggle(name, enabled),
                               ),
                               h(
@@ -823,9 +849,22 @@ export class ThemesPanel extends PanelBase {
             .catch((e) => log.error("theme activation failed", e));
     }
 
+    private renderThemeToggle(name: string, isActive: boolean): unknown {
+        return h(
+            "button",
+            {
+                className: `mc-toggle${isActive ? " on" : ""}`,
+                role: "switch",
+                "aria-checked": isActive,
+                title: isActive ? "Disable theme" : "Apply theme",
+                onClick: () => this.activate(isActive ? null : name),
+            },
+            h("span", null),
+        );
+    }
+
     override render(): unknown {
         const { themes, active, customCss, saved } = this.state;
-        const activate = (name: string | null) => this.activate(name);
         const setCustomCss = (v: string) => this.setState({ customCss: v });
 
     return h(
@@ -834,13 +873,22 @@ export class ThemesPanel extends PanelBase {
         h("h2", { style: S.h2 }, "Themes"),
         h(
             "div",
+            { className: "mc-warn" },
+            h("strong", null, "Theme performance: "),
+            "Themes and custom CSS can cause lag. The most common cause is the ",
+            h("code", null, ":has()"),
+            " operator — avoid it in custom CSS and poorly-written themes.",
+        ),
+        h(
+            "div",
             { className: "mc-grid" },
             themes === null
                 ? h("div", { style: S.muted }, "Loading…")
                 : themes.length === 0
                   ? h("div", { style: S.muted }, "No themes installed.")
-                  : themes.map((t) =>
-                        h(
+                  : themes.map((t) => {
+                        const isActive = active === t.name;
+                        return h(
                             "div",
                             { key: t.name, className: "mc-card" },
                             h(
@@ -848,39 +896,35 @@ export class ThemesPanel extends PanelBase {
                                 { className: "mc-head" },
                                 h(
                                     "div",
-                                    { className: "mc-name" },
-                                    t.label ?? t.name,
+                                    { className: "mc-head-l" },
+                                    statusDot(isActive, isActive),
+                                    h(
+                                        "div",
+                                        null,
+                                        h(
+                                            "div",
+                                            { className: "mc-name" },
+                                            t.label ?? t.name,
+                                        ),
+                                        t.authors?.length
+                                            ? h(
+                                                  "div",
+                                                  { className: "mc-author" },
+                                                  `by ${t.authors.join(", ")}`,
+                                              )
+                                            : null,
+                                    ),
                                 ),
-                                active === t.name
-                                    ? h(Badge, { ok: true, text: "active" })
-                                    : h(
-                                          "button",
-                                          {
-                                              style: S.btn,
-                                              onClick: () => activate(t.name),
-                                          },
-                                          "Apply",
-                                      ),
+                                this.renderThemeToggle(t.name, isActive),
                             ),
                             h(
                                 "div",
                                 { className: "mc-desc", style: { minHeight: 0 } },
                                 t.name,
                             ),
-                        ),
-                    ),
+                        );
+                    }),
         ),
-        active !== null
-            ? h(
-                  "div",
-                  { style: { marginTop: 8 } },
-                  h(
-                      "button",
-                      { style: S.btnOff, onClick: () => activate(null) },
-                      "Disable theme",
-                  ),
-              )
-            : null,
         h(
             "div",
             { className: "mc-card", style: { marginTop: 16 } },
@@ -908,6 +952,11 @@ export class ThemesPanel extends PanelBase {
                 onChange: (e: { target: { value: string } }) =>
                     setCustomCss(e.target.value),
             }),
+            h(
+                "div",
+                { className: "mc-desc", style: { minHeight: 0, marginTop: 6 } },
+                `${customCss.split("\n").length} lines · ${customCss.length} chars · saved instantly on Save`,
+            ),
         ),
         );
     }

@@ -407,28 +407,31 @@ interface HeadersReceivedDetails {
 }
 
 function installCspPatch(): void {
-    const ses = (
-        electron as unknown as {
-            session?: {
-                defaultSession?: {
-                    webRequest?: {
-                        onHeadersReceived?: (
-                            listener: (
-                                details: HeadersReceivedDetails,
-                                callback: (response: {
-                                    cancel: boolean;
-                                    responseHeaders: PolicyMap | undefined;
-                                }) => void,
-                            ) => void,
-                        ) => void;
+    try {
+        const ses = (
+            electron as unknown as {
+                session?: {
+                    defaultSession?: {
+                        webRequest?: {
+                            onHeadersReceived?: (
+                                listener: (
+                                    details: HeadersReceivedDetails,
+                                    callback: (response: {
+                                        cancel: boolean;
+                                        responseHeaders: PolicyMap | undefined;
+                                    }) => void,
+                                ) => void,
+                            ) => void;
+                        };
                     };
                 };
-            };
+            }
+        ).session?.defaultSession;
+        const wr = ses?.webRequest;
+        if (!wr?.onHeadersReceived) {
+            log("csp patch skipped (no webRequest)");
+            return;
         }
-    ).session?.defaultSession;
-    const wr = ses?.webRequest;
-    if (!wr?.onHeadersReceived) return;
-    try {
         wr.onHeadersReceived((details, callback) => {
             const headers = details.responseHeaders;
             if (headers) {
@@ -446,7 +449,17 @@ function installCspPatch(): void {
         });
         log("csp patch installed");
     } catch (e) {
+        // session.defaultSession can throw before app ready on some
+        // Electron builds — retry once the app is up rather than dying.
         log("csp patch failed", e);
+        try {
+            const app = electron.app as unknown as {
+                once?: (event: string, cb: () => void) => void;
+            };
+            app.once?.("ready", () => installCspPatch());
+        } catch {
+            // give up silently — Discord still starts
+        }
     }
 }
 
@@ -990,8 +1003,19 @@ function registerIpc(): void {
 // ---------------------------------------------------------------------------
 
 installModuleLoadPatch();
-installCspPatch();
-registerIpc();
+// Monocord must never be the reason Discord won't start: every optional
+// subsystem is isolated so a failure degrades features, not the client.
+try {
+    installCspPatch();
+} catch (e) {
+    log("csp patch crashed", e);
+}
+try {
+    registerIpc();
+    log("ipc registered");
+} catch (e) {
+    log("ipc registration failed", e);
+}
 log(`bootstrap loaded (data: ${DATA_DIR})`);
 
 const appAsar = path.join(

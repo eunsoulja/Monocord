@@ -7,6 +7,7 @@
  * work and can shadow a built-in of the same name.
  */
 
+import { CHILLAX_CSS } from "./chillax-theme";
 import { SYSTEM24_CSS } from "./system24-theme";
 
 export interface BuiltinTheme {
@@ -318,5 +319,11 @@ export const BUILTIN_THEMES: BuiltinTheme[] = [
         label: "system24",
         authors: ["refact0r"],
         css: SYSTEM24_CSS,
+    },
+    {
+        name: "chillax",
+        label: "Chillax",
+        authors: ["Chillax Squad", "Wq", "LofiTurtle", "Inmoresentum", "Demented_Elmo"],
+        css: CHILLAX_CSS,
     },
 ];

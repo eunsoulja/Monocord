@@ -254,7 +254,17 @@ async function buildActivity(
 /** Strip fields the game-IPC protocol doesn't understand. */
 function toIpcActivity(activity: Record<string, unknown>): Record<string, unknown> {
     const out: Record<string, unknown> = { type: activity.type ?? 0 };
-    for (const key of ["name", "state", "details", "url", "timestamps", "party", "assets"]) {
+    for (const key of [
+        "name",
+        "state",
+        "details",
+        "url",
+        "timestamps",
+        "party",
+        "buttons",
+        "metadata",
+        "assets",
+    ]) {
         if (activity[key] != null) out[key] = activity[key];
     }
     // Discord's IPC protocol wants unix SECONDS, not milliseconds.
@@ -265,16 +275,21 @@ function toIpcActivity(activity: Record<string, unknown>): Record<string, unknow
             if (typeof v === "number" && v > 1e12) ts[k] = Math.floor(v / 1000);
         }
     }
+    // The IPC activity schema accepts the same asset values Discord's own
+    // pipeline produces (asset ids, mp:external/, gif:/mp4: prefixes), so
+    // pass them through verbatim — only drop the click-URL extras that
+    // aren't part of the RPC asset model.
     const assets = activity.assets as Record<string, unknown> | undefined;
     if (assets) {
         const clean: Record<string, string> = {};
-        for (const key of ["large_image", "large_text", "small_image", "small_text"]) {
+        for (const key of [
+            "large_image",
+            "large_text",
+            "small_image",
+            "small_text",
+        ]) {
             const v = assets[key];
-            // The game IPC protocol doesn't know Discord's external-asset
-            // prefixes — strip them so plain URLs still resolve.
-            if (typeof v === "string" && v) {
-                clean[key] = previewAssetUrl(v);
-            }
+            if (typeof v === "string" && v) clean[key] = v;
         }
         out.assets = clean;
     }

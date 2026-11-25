@@ -695,9 +695,12 @@ function getPluginCode(name: string): { code: string; manifest: PluginManifestIn
 // Discord desktop exposes \\.\pipe\discord-ipc-0 for games to set activity.
 // We speak the same framed JSON protocol: 8-byte LE header
 // {opcode u32, length u32} + UTF-8 payload. Opcodes: 0 handshake,
-// 1 command frame, 2 close. The activity is attributed to the Discord
-// application id supplied by the user (created in the developer portal —
-// image assets must be uploaded there to render).
+// 1 command frame, 2 close, 3 ping, 4 pong. Discord pings clients and
+// closes the socket if they don't pong — which is why the presence kept
+// dying ~20s after connect (write EPIPE on the resend timer). The
+// activity is attributed to the Discord application id supplied by the
+// user (created in the developer portal — image assets must be uploaded
+// there to render).
 
 interface RpcConfig {
     appId: string;
@@ -722,15 +725,68 @@ let rpcConnecting = false;
 let rpcNonce = 0;
 let rpcResendTimer: NodeJS.Timeout | null = null;
 let rpcRetryTimer: NodeJS.Timeout | null = null;
+let rpcBuffer = Buffer.alloc(0);
 
-function rpcSend(opcode: number, payload: unknown): void {
+const RPC_MAX_FRAME = 1024 * 1024;
+
+/** Write one framed message; no-op unless the socket is writable. */
+function rpcSendRaw(opcode: number, body: Buffer): void {
     const sock = rpcSocket;
-    if (!sock || sock.destroyed) return;
-    const body = Buffer.from(JSON.stringify(payload), "utf8");
+    if (!sock || sock.destroyed || !sock.writable) return;
     const header = Buffer.alloc(8);
     header.writeUInt32LE(opcode, 0);
     header.writeUInt32LE(body.length, 4);
     sock.write(Buffer.concat([header, body]));
+}
+
+function rpcSend(opcode: number, payload: unknown): void {
+    rpcSendRaw(opcode, Buffer.from(JSON.stringify(payload), "utf8"));
+}
+
+/** Handle one complete inbound frame from Discord. */
+function rpcHandleFrame(opcode: number, body: Buffer): void {
+    if (opcode === 3) {
+        // PING — Discord drops clients that don't answer.
+        rpcSendRaw(4, body);
+        return;
+    }
+    if (opcode === 2) {
+        log("rpc: server sent CLOSE frame");
+        rpcSocket?.destroy();
+        return;
+    }
+    if (opcode === 1) {
+        try {
+            const msg = JSON.parse(body.toString("utf8")) as {
+                evt?: string;
+                cmd?: string;
+                nonce?: string;
+            };
+            log(
+                `rpc: frame evt=${msg.evt ?? "-"} cmd=${msg.cmd ?? "-"} nonce=${msg.nonce ?? "-"}`,
+            );
+        } catch {
+            log(`rpc: frame (non-JSON, ${body.length} bytes)`);
+        }
+    }
+}
+
+/** Parse the byte stream into frames; Discord may split/coalesce them. */
+function rpcOnData(chunk: Buffer): void {
+    rpcBuffer = Buffer.concat([rpcBuffer, chunk]);
+    for (;;) {
+        if (rpcBuffer.length < 8) return;
+        const opcode = rpcBuffer.readUInt32LE(0);
+        const length = rpcBuffer.readUInt32LE(4);
+        if (length > RPC_MAX_FRAME) {
+            rpcBuffer = Buffer.alloc(0);
+            return;
+        }
+        if (rpcBuffer.length < 8 + length) return;
+        const body = rpcBuffer.subarray(8, 8 + length);
+        rpcBuffer = rpcBuffer.subarray(8 + length);
+        rpcHandleFrame(opcode, body);
+    }
 }
 
 function rpcSetActivity(): void {
@@ -770,6 +826,7 @@ function rpcConnect(): void {
     rpcConnecting = true;
     const sock = net.connect(RPC_PIPE);
     rpcSocket = sock;
+    rpcBuffer = Buffer.alloc(0);
     sock.on("connect", () => {
         rpcConnecting = false;
         rpcSend(0, { v: 1, client_id: cfg.appId });
@@ -782,12 +839,14 @@ function rpcConnect(): void {
             rpcRetryTimer = null;
         }
     });
+    sock.on("data", rpcOnData);
     sock.on("error", (e) => {
         log(`rpc: socket error: ${e.message}`);
     });
     sock.on("close", () => {
         rpcSocket = null;
         rpcConnecting = false;
+        rpcBuffer = Buffer.alloc(0);
         if (rpcResendTimer) {
             clearInterval(rpcResendTimer);
             rpcResendTimer = null;

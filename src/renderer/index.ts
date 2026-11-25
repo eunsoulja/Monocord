@@ -16,7 +16,10 @@ import type { Plugin, PluginManifest, Theme } from "../core/types";
 import { registerExtras } from "../plugins/extras";
 import { registerExamples } from "../plugins/examples";
 import { CustomRPC } from "../plugins/custom-rpc";
+import { registerChat3 } from "../plugins/chat3";
 import { registerMods } from "../plugins/mods";
+import { registerSocial3 } from "../plugins/social3";
+import { registerSystem3 } from "../plugins/system3";
 import { registerUxExtras } from "../plugins/ux-extras";
 import { SETTINGS_PLUGIN_NAME, SettingsUIPlugin } from "../plugins/settings-ui";
 
@@ -111,6 +114,9 @@ async function main(): Promise<void> {
     registerExtras();
     registerUxExtras();
     registerMods();
+    registerChat3();
+    registerSocial3();
+    registerSystem3();
     try {
         Api.Plugins.register(CustomRPC);
     } catch (e) {

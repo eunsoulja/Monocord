@@ -12,25 +12,25 @@ import { el, on, toast } from "./dom-utils";
 
 const log = Logger.get("mods");
 
-interface Bridge {
+export interface Bridge {
     invoke(channel: string, ...args: unknown[]): Promise<unknown>;
 }
 
-function bridge(): Bridge | null {
+export function bridge(): Bridge | null {
     return (window as { monocord?: Bridge }).monocord ?? null;
 }
 
-function isObj(v: unknown): v is Record<string, unknown> {
+export function isObj(v: unknown): v is Record<string, unknown> {
     return typeof v === "object" && v !== null;
 }
 
 /** Discord's Flux dispatcher: subscribe(cb) receives action objects with `type`. */
-interface Dispatcher {
+export interface Dispatcher {
     subscribe(cb: (action: Record<string, unknown>) => void): unknown;
     dispatch?(action: Record<string, unknown>): void;
 }
 
-function findDispatcher(): Dispatcher | null {
+export function findDispatcher(): Dispatcher | null {
     const looksLike = (o: unknown): o is Dispatcher => {
         if (!isObj(o)) return false;
         const d = o as unknown as Dispatcher;
@@ -60,7 +60,7 @@ function findDispatcher(): Dispatcher | null {
 }
 
 /** Find the flux store for `displayName` (e.g. "MessageStore"). */
-function findStoreByName(name: string): Record<string, unknown> | null {
+export function findStoreByName(name: string): Record<string, unknown> | null {
     const store = Api.Webpack.findStore(name);
     return isObj(store) ? store : null;
 }
@@ -303,7 +303,7 @@ function applyRules(content: string): string {
 }
 
 /** Find Discord's message-send entry point; returns the module object. */
-function findSendModule(): Record<string, unknown> | null {
+export function findSendModule(): Record<string, unknown> | null {
     const candidates = Api.Webpack.findAllByProps("sendMessage");
     for (const exp of candidates) {
         const targets: unknown[] = [exp];

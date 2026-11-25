@@ -627,6 +627,13 @@ function registerIpc(): void {
         setBadgeBlocking(on === true);
         return true;
     });
+    ipcMain.handle("monocord:open-external", (_e, url: unknown) => {
+        if (typeof url === "string" && /^https?:\/\//.test(url)) {
+            const shell = electron.shell as { openExternal(u: string): Promise<void> };
+            void shell.openExternal(url);
+        }
+        return true;
+    });
 
     // Renderer logs arrive via ipcRenderer.invoke — must be `handle`, not
     // `on`, or the renderer's promise never resolves and logs vanish.

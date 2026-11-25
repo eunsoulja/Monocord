@@ -84,6 +84,71 @@ export function el<K extends keyof HTMLElementTagNameMap>(
     return node;
 }
 
+interface MenuItem {
+    label: string;
+    action: () => void;
+    danger?: boolean;
+}
+
+/** Show a small context menu at (x, y); returns a close function. */
+export function contextMenu(x: number, y: number, items: MenuItem[]): () => void {
+    const menu = el(
+        "div",
+        {
+            position: "fixed",
+            left: `${x}px`,
+            top: `${y}px`,
+            zIndex: "100001",
+            background: "var(--background-floating, #111214)",
+            border: "1px solid var(--background-modifier-accent, #3f4147)",
+            borderRadius: "8px",
+            padding: "4px",
+            minWidth: "180px",
+            boxShadow: "0 8px 24px rgba(0,0,0,.4)",
+        },
+    );
+    const close = () => menu.remove();
+    for (const item of items) {
+        const b = el(
+            "button",
+            {
+                display: "block",
+                width: "100%",
+                textAlign: "left",
+                background: "none",
+                border: "none",
+                color: item.danger
+                    ? "var(--status-danger, #f23f43)"
+                    : "var(--text-normal, #dbdee1)",
+                padding: "8px 12px",
+                fontSize: "13px",
+                cursor: "pointer",
+                borderRadius: "4px",
+            },
+            item.label,
+        );
+        b.addEventListener("mouseenter", () => (b.style.background = "var(--background-modifier-hover, rgba(78,80,88,.3))"));
+        b.addEventListener("mouseleave", () => (b.style.background = "none"));
+        b.addEventListener("click", () => {
+            close();
+            item.action();
+        });
+        menu.append(b);
+    }
+    document.body.append(menu);
+    setTimeout(() => {
+        document.addEventListener("click", close, { once: true });
+        document.addEventListener("contextmenu", close, { once: true });
+        document.addEventListener("keydown", function onKey(e) {
+            if (e.key === "Escape") {
+                close();
+                document.removeEventListener("keydown", onKey);
+            }
+        });
+    }, 0);
+    return close;
+}
+
 /** Show a small auto-dismissing toast near the top of the Discord window. */
 export function toast(text: string, ms = 2200): void {
     const box = el(

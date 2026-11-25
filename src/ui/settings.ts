@@ -220,6 +220,39 @@ const PLUGIN_EVENTS = [
     "plugin.unregistered",
 ];
 
+const PLUGINS_CSS = `
+.mc-grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));}
+.mc-card{background:var(--card-background-default,var(--background-secondary,#2b2d31));border:1px solid var(--border-subtle,rgba(255,255,255,.06));border-radius:8px;padding:12px 14px;transition:transform .1s ease,box-shadow .1s ease,border-color .1s ease;box-sizing:border-box;}
+.mc-card:hover{transform:translateY(-1px);box-shadow:0 8px 16px rgba(0,0,0,.28);border-color:var(--border-subtle,#3f4147);}
+.mc-card-off{opacity:.55;}
+.mc-card-off:hover{opacity:.8;}
+.mc-name{font-weight:700;font-size:15px;display:flex;align-items:center;gap:8px;min-width:0;}
+.mc-ver{font-size:11px;color:var(--text-muted,#949ba4);font-weight:400;flex-shrink:0;}
+.mc-author{font-size:12px;color:var(--text-muted,#949ba4);margin-top:2px;}
+.mc-desc{margin-top:8px;font-size:12px;line-height:16px;color:var(--text-normal,#dbdee1);opacity:.75;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:32px;}
+.mc-head{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.mc-head-l{display:flex;align-items:center;gap:6px;min-width:0;flex:1;}
+.mc-icon-btn{background:transparent;border:none;color:var(--icon-muted,#80848e);cursor:pointer;font-size:15px;padding:4px;border-radius:4px;line-height:1;flex-shrink:0;}
+.mc-icon-btn:hover{color:var(--interactive-icon-hover,#dbdee1);background:var(--background-modifier-hover,rgba(78,80,88,.35));}
+.mc-back{background:transparent;border:none;color:var(--brand-500,#5865f2);cursor:pointer;font-size:13px;padding:4px 0;margin-bottom:8px;}
+.mc-back:hover{text-decoration:underline;}
+.mc-detail{max-width:680px;}
+.mc-toggle{position:relative;width:38px;height:22px;border-radius:11px;border:none;cursor:pointer;padding:0;flex-shrink:0;background:var(--background-modifier-accent,#4e5058);transition:background .15s;}
+.mc-toggle.on{background:var(--status-positive,#23a55a);}
+.mc-toggle>span{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.4);}
+.mc-toggle.on>span{left:18px;}
+.mc-filters{display:flex;gap:8px;margin:10px 0 14px;}
+.mc-chip{background:var(--background-secondary,#2b2d31);border:1px solid var(--background-modifier-accent,#3f4147);color:var(--text-normal,#dbdee1);border-radius:16px;padding:5px 14px;font-size:13px;cursor:pointer;}
+.mc-chip.on{background:var(--brand-500,#5865f2);border-color:var(--brand-500,#5865f2);color:#fff;}
+`;
+
+let pluginsCssInjected = false;
+function ensurePluginsCss(): void {
+    if (pluginsCssInjected) return;
+    pluginsCssInjected = true;
+    Api.Themes.injectCss("monocord-plugins-ui", PLUGINS_CSS);
+}
+
 function pluginRows(): { name: string; plugin: Plugin; enabled: boolean; running: boolean }[] {
     return Api.Plugins.names()
         .filter((n) => n !== "MonocordSettings")
@@ -234,14 +267,25 @@ function pluginRows(): { name: string; plugin: Plugin; enabled: boolean; running
 export class PluginsPanel extends PanelBase {
     override state: {
         rev: number;
-        openSettings: string | null;
         drafts: Record<string, string>;
         errors: Record<string, string>;
         values: Record<string, Record<string, unknown>>;
-    } = { rev: 0, openSettings: null, drafts: {}, errors: {}, values: {} };
+        query: string;
+        filter: "all" | "on" | "off";
+        detail: string | null;
+    } = {
+        rev: 0,
+        drafts: {},
+        errors: {},
+        values: {},
+        query: "",
+        filter: "all",
+        detail: null,
+    };
     private offs: (() => void)[] = [];
 
     componentDidMount(): void {
+        ensurePluginsCss();
         this.offs = PLUGIN_EVENTS.map((e) =>
             Events.on(e, () => this.setState({ rev: this.state.rev + 1 })),
         );
@@ -407,15 +451,6 @@ export class PluginsPanel extends PanelBase {
         );
     }
 
-    private toggleSettings(name: string, plugin: Plugin): void {
-        if (this.state.openSettings === name) {
-            this.setState({ openSettings: null });
-            return;
-        }
-        this.setState({ openSettings: name });
-        if (!this.state.drafts[name]) void this.loadDraft(name, plugin);
-    }
-
     private saveSettings(name: string, plugin: Plugin): void {
         const raw = this.state.drafts[name] ?? "";
         let parsed: Record<string, unknown>;
@@ -447,177 +482,295 @@ export class PluginsPanel extends PanelBase {
         })();
     }
 
-    override render(): unknown {
-        const { openSettings, drafts, errors } = this.state;
-        const rows = pluginRows();
+    private openDetail(name: string, plugin: Plugin): void {
+        this.setState({ detail: name });
+        if (!this.state.values[name] && !this.state.drafts[name]) {
+            void this.loadDraft(name, plugin);
+        }
+    }
 
-    return h(
-        "div",
-        { style: S.page },
-        h("h2", { style: S.h2 }, "Plugins"),
-        rows.length === 0
-            ? h("div", { style: S.muted }, "No plugins registered.")
-            : rows.map(({ name, plugin, enabled }) => {
-                  const keys = this.settingKeys(plugin);
-                  const open = openSettings === name;
-                  return h(
-                      "div",
-                      { key: name, style: { ...S.card, padding: "10px 14px" } },
-                      h(
-                          "div",
-                          { style: S.row },
-                          h(
-                              "div",
-                              null,
-                              h("strong", null, name),
-                              plugin.version
-                                  ? h("span", { style: S.muted }, ` v${plugin.version}`)
-                                  : null,
-                          ),
-                          h(
-                              "div",
-                              { style: { display: "flex", alignItems: "center", gap: 10 } },
-                              keys.length > 0
-                                  ? h(
-                                        "button",
-                                        {
-                                            style: S.btnOff,
-                                            onClick: () =>
-                                                this.toggleSettings(name, plugin),
-                                        },
-                                        open ? "Hide" : "Settings",
-                                    )
-                                  : null,
-                              // Toggle switch
-                              h(
-                                  "button",
-                                  {
-                                      role: "switch",
-                                      "aria-checked": enabled,
-                                      title: enabled ? "Disable" : "Enable",
-                                      onClick: () => {
-                                          const p = enabled
-                                              ? Api.Plugins.disable(name)
-                                              : Api.Plugins.enable(name);
-                                          void p.catch((e) =>
-                                              log.error(`toggle ${name} failed`, e),
-                                          );
-                                      },
-                                      style: {
-                                          position: "relative",
-                                          width: 42,
-                                          height: 24,
-                                          borderRadius: 12,
-                                          border: "none",
-                                          cursor: "pointer",
-                                          padding: 0,
-                                          flexShrink: 0,
-                                          background: enabled
-                                              ? "var(--status-positive, #23a55a)"
-                                              : "var(--background-modifier-accent, #4e5058)",
-                                          transition: "background .15s",
-                                      },
-                                  },
-                                  h("span", {
-                                      style: {
-                                          position: "absolute",
-                                          top: 3,
-                                          left: enabled ? 21 : 3,
-                                          width: 18,
-                                          height: 18,
-                                          borderRadius: "50%",
-                                          background: "#fff",
-                                          transition: "left .15s",
-                                          boxShadow: "0 1px 3px rgba(0,0,0,.4)",
-                                      },
-                                  }),
-                              ),
-                          ),
-                      ),
-                      h(
+    private togglePlugin(name: string, enabled: boolean): void {
+        const p = enabled
+            ? Api.Plugins.disable(name)
+            : Api.Plugins.enable(name);
+        void p.catch((e) => log.error(`toggle ${name} failed`, e));
+    }
+
+    private renderToggle(name: string, enabled: boolean): unknown {
+        return h(
+            "button",
+            {
+                className: `mc-toggle${enabled ? " on" : ""}`,
+                role: "switch",
+                "aria-checked": enabled,
+                title: enabled ? "Disable" : "Enable",
+                onClick: () => this.togglePlugin(name, enabled),
+            },
+            h("span", null),
+        );
+    }
+
+    private renderSettingsBody(name: string, plugin: Plugin): unknown {
+        const { drafts, errors } = this.state;
+        if (plugin.settingsSchema) {
+            return h(
+                "div",
+                { style: { marginTop: 14, paddingLeft: 4 } },
+                Object.entries(plugin.settingsSchema).map(([key, field]) =>
+                    this.renderField(name, plugin, key, field),
+                ),
+                errors[name]
+                    ? h(
                           "div",
                           {
                               style: {
                                   ...S.muted,
-                                  marginTop: 4,
-                                  marginLeft: 2,
-                                  fontSize: 12,
+                                  color: "var(--status-danger,#f23f43)",
+                                  marginTop: 6,
                               },
                           },
-                          plugin.description ?? "No description",
-                      ),
-                      open
-                          ? plugin.settingsSchema
-                              ? h(
-                                    "div",
-                                    { style: { marginTop: 10, paddingLeft: 4 } },
-                                    Object.entries(plugin.settingsSchema).map(
-                                        ([key, field]) =>
-                                            this.renderField(name, plugin, key, field),
-                                    ),
-                                    errors[name]
-                                        ? h(
-                                              "div",
-                                              {
-                                                  style: {
-                                                      ...S.muted,
-                                                      color: "var(--status-danger,#f23f43)",
-                                                      marginTop: 6,
-                                                  },
-                                              },
-                                              errors[name],
-                                          )
-                                        : null,
-                                )
-                              : h(
+                          errors[name],
+                      )
+                    : null,
+            );
+        }
+        return h(
+            "div",
+            { style: { marginTop: 14 } },
+            h("textarea", {
+                style: { ...S.input, minHeight: 140, resize: "vertical" },
+                value: drafts[name] ?? "",
+                placeholder: "{}",
+                onChange: (e: { target: { value: string } }) =>
+                    this.setState({
+                        drafts: { ...this.state.drafts, [name]: e.target.value },
+                    }),
+            }),
+            h(
+                "div",
+                {
+                    style: {
+                        ...S.row,
+                        marginTop: 8,
+                        justifyContent: "flex-start",
+                    },
+                },
+                h(
+                    "button",
+                    {
+                        style: S.btn,
+                        onClick: () => this.saveSettings(name, plugin),
+                    },
+                    "Save settings",
+                ),
+                errors[name]
+                    ? h(
+                          "span",
+                          {
+                              style: {
+                                  ...S.muted,
+                                  color: "var(--status-danger,#f23f43)",
+                              },
+                          },
+                          errors[name],
+                      )
+                    : null,
+            ),
+        );
+    }
+
+    private renderDetail(name: string, plugin: Plugin, enabled: boolean): unknown {
+        const hasSettings = this.settingKeys(plugin).length > 0;
+        return h(
+            "div",
+            { className: "mc-detail" },
+            h(
+                "button",
+                { className: "mc-back", onClick: () => this.setState({ detail: null }) },
+                "← All plugins",
+            ),
+            h(
+                "div",
+                { className: `mc-card${enabled ? "" : " mc-card-off"}` },
+                h(
+                    "div",
+                    { className: "mc-head" },
+                    h(
+                        "div",
+                        { className: "mc-head-l" },
+                        h(
+                            "div",
+                            null,
+                            h(
                                 "div",
-                                { style: { marginTop: 10 } },
-                                h("textarea", {
-                                    style: {
-                                        ...S.input,
-                                        minHeight: 110,
-                                        resize: "vertical",
-                                    },
-                                    value: drafts[name] ?? "",
-                                    placeholder: "{}",
-                                    onChange: (e: { target: { value: string } }) =>
-                                        this.setState({
-                                            drafts: {
-                                                ...this.state.drafts,
-                                                [name]: e.target.value,
+                                { className: "mc-name" },
+                                name,
+                                plugin.version
+                                    ? h("span", { className: "mc-ver" }, `v${plugin.version}`)
+                                    : null,
+                            ),
+                            plugin.authors?.length
+                                ? h(
+                                      "div",
+                                      { className: "mc-author" },
+                                      `by ${plugin.authors.join(", ")}`,
+                                  )
+                                : null,
+                        ),
+                    ),
+                    this.renderToggle(name, enabled),
+                ),
+                h("div", { className: "mc-desc", style: { minHeight: 0 } },
+                    plugin.description ?? "No description"),
+            ),
+            hasSettings
+                ? h(
+                      "div",
+                      { className: "mc-card", style: { marginTop: 12 } },
+                      h(
+                          "div",
+                          { className: "mc-name", style: { fontSize: 14 } },
+                          "Settings",
+                      ),
+                      this.renderSettingsBody(name, plugin),
+                  )
+                : null,
+        );
+    }
+
+    override render(): unknown {
+        const { query, filter, detail } = this.state;
+
+        const detailRow = detail
+            ? pluginRows().find((r) => r.name === detail)
+            : undefined;
+        if (detailRow) {
+            return h(
+                "div",
+                { style: S.page },
+                h("h2", { style: S.h2 }, "Plugins"),
+                this.renderDetail(detailRow.name, detailRow.plugin, detailRow.enabled),
+            );
+        }
+
+        const q = query.trim().toLowerCase();
+        const rows = pluginRows()
+            .filter(({ name, plugin, enabled }) => {
+                if (filter === "on" && !enabled) return false;
+                if (filter === "off" && enabled) return false;
+                if (!q) return true;
+                return (
+                    name.toLowerCase().includes(q) ||
+                    name.replace(/[A-Z]/g, (c) => ` ${c.toLowerCase()}`).includes(q) ||
+                    (plugin.description ?? "").toLowerCase().includes(q)
+                );
+            })
+            .sort((a, b) => a.name.localeCompare(b.name));
+
+        const chips: [typeof filter, string][] = [
+            ["all", "All"],
+            ["on", "Enabled"],
+            ["off", "Disabled"],
+        ];
+
+        return h(
+            "div",
+            { style: S.page },
+            h("h2", { style: S.h2 }, "Plugins"),
+            h("div", { style: { ...S.muted, marginBottom: 10 } },
+                `${pluginRows().length} plugins · click a card for details & settings`),
+            h("input", {
+                style: S.input,
+                placeholder: "Search plugins…",
+                value: query,
+                onChange: (e: { target: { value: string } }) =>
+                    this.setState({ query: e.target.value }),
+            }),
+            h(
+                "div",
+                { className: "mc-filters" },
+                chips.map(([value, label]) =>
+                    h(
+                        "button",
+                        {
+                            key: value,
+                            className: `mc-chip${filter === value ? " on" : ""}`,
+                            onClick: () => this.setState({ filter: value }),
+                        },
+                        label,
+                    ),
+                ),
+            ),
+            rows.length === 0
+                ? h("div", { style: S.muted }, "No plugins match.")
+                : h(
+                      "div",
+                      { className: "mc-grid" },
+                      rows.map(({ name, plugin, enabled }) =>
+                          h(
+                              "div",
+                              {
+                                  key: name,
+                                  className: `mc-card${enabled ? "" : " mc-card-off"}`,
+                                  title: plugin.description ?? name,
+                              },
+                              h(
+                                  "div",
+                                  { className: "mc-head" },
+                                  h(
+                                      "div",
+                                      { className: "mc-head-l" },
+                                      h(
+                                          "div",
+                                          null,
+                                          h(
+                                              "div",
+                                              { className: "mc-name" },
+                                              name,
+                                              plugin.version
+                                                  ? h("span", { className: "mc-ver" }, `v${plugin.version}`)
+                                                  : null,
+                                          ),
+                                          plugin.authors?.length
+                                              ? h(
+                                                    "div",
+                                                    { className: "mc-author" },
+                                                    `by ${plugin.authors.join(", ")}`,
+                                                )
+                                              : null,
+                                      ),
+                                  ),
+                                  this.settingKeys(plugin).length > 0
+                                      ? h(
+                                            "button",
+                                            {
+                                                className: "mc-icon-btn",
+                                                title: "Settings",
+                                                onClick: () =>
+                                                    this.openDetail(name, plugin),
                                             },
-                                        }),
-                                }),
-                                h(
-                                    "div",
-                                    {
-                                        style: {
-                                            ...S.row,
-                                            marginTop: 8,
-                                            justifyContent: "flex-start",
-                                        },
-                                    },
-                                    h(
-                                        "button",
-                                        {
-                                            style: S.btn,
-                                            onClick: () =>
-                                                this.saveSettings(name, plugin),
-                                        },
-                                        "Save settings",
-                                    ),
-                                    errors[name]
-                                        ? h(
-                                              "span",
-                                              { style: { ...S.muted, color: "var(--status-danger,#f23f43)" } },
-                                              errors[name],
-                                          )
-                                        : null,
-                                ),
-                            )
-                          : null,
-                  );
-              }),
+                                            "⚙",
+                                        )
+                                      : h(
+                                            "button",
+                                            {
+                                                className: "mc-icon-btn",
+                                                title: "Details",
+                                                onClick: () =>
+                                                    this.openDetail(name, plugin),
+                                            },
+                                            "ⓘ",
+                                        ),
+                                  this.renderToggle(name, enabled),
+                              ),
+                              h(
+                                  "div",
+                                  { className: "mc-desc" },
+                                  plugin.description ?? "No description",
+                              ),
+                          ),
+                      ),
+                  ),
         );
     }
 }

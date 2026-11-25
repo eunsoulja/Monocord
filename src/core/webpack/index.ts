@@ -27,6 +27,30 @@ export interface WebpackRequire {
     (id: string | number): unknown;
 }
 
+/**
+ * A source-level rewrite applied to a Discord module factory before the
+ * runtime registers it.
+ *
+ * Some client internals (notably the settings layout walker) are closures,
+ * not exported values. Rewriting the factory source is the only hook that
+ * survives rspack's deferred module namespaces. Patches are installed before
+ * the owning chunk is loaded; factories that already executed are left to
+ * their cached exports.
+ */
+export interface FactoryPatch {
+    /** Plugin responsible, for logs. */
+    plugin: string;
+    /** Cheap pre-filter tested against the factory source. */
+    find: string | RegExp;
+    /** Applied to the full factory source when `find` matches. */
+    replacement: {
+        match: RegExp;
+        replace: string;
+    };
+}
+
+type ModuleFactory = (...args: unknown[]) => unknown;
+
 declare global {
     interface Window {
         webpackChunkdiscord_app?: unknown[];
@@ -51,6 +75,9 @@ class WebpackFinder {
     /** Memoized exports lookups: moduleId → exports | undefined */
     private exportCache = new Map<string, unknown>();
     private warnedNoChunk = false;
+    private factoryPatches: FactoryPatch[] = [];
+    private interceptedChunks = new WeakSet<unknown[]>();
+    private patchedFactories = new WeakSet<ModuleFactory>();
 
     /** Whether the webpack require function has been captured. */
     get ready(): boolean {
@@ -94,6 +121,130 @@ class WebpackFinder {
             }
         }
         return false;
+    }
+
+    /**
+     * Register source patches for module factories.
+     *
+     * Discord/rspack registers lazy chunks by pushing onto `webpackChunk*`.
+     * Intercepting that push lets us rewrite a factory before the runtime
+     * executes it — necessary for code that is only reachable through a
+     * closure. Patches installed after a factory ran cannot affect its
+     * cached exports, so callers should register early (plugin start).
+     *
+     * Returns how many already-registered factories matched immediately.
+     */
+    patchFactories(...patches: FactoryPatch[]): number {
+        this.factoryPatches.push(...patches);
+        const req = this.require_();
+        this.interceptChunks();
+
+        let patched = 0;
+        for (const [id, factory] of Object.entries(req.m ?? {})) {
+            if (typeof factory !== "function") continue;
+            const replacement = this.applyFactoryPatches(id, factory as ModuleFactory);
+            if (replacement) {
+                (req.m as Record<string, unknown>)[id] = replacement;
+                patched++;
+            }
+        }
+        log.info("factory patches installed", {
+            patches: this.factoryPatches.length,
+            alreadyRegistered: patched,
+        });
+        return patched;
+    }
+
+    /** Wrap every chunk array's push so new factories can be rewritten. */
+    private interceptChunks(): void {
+        if (this.factoryPatches.length === 0) return;
+        for (const chunks of chunkArrays()) {
+            if (this.interceptedChunks.has(chunks)) continue;
+            this.interceptedChunks.add(chunks);
+            const target = chunks as { push?: (...items: unknown[]) => unknown };
+            const originalPush = target.push;
+            if (typeof originalPush !== "function") continue;
+            const self = this;
+            target.push = function patchedPush(
+                this: unknown,
+                ...items: unknown[]
+            ): unknown {
+                self.transformChunkModules(items);
+                return originalPush.apply(this, items);
+            };
+        }
+    }
+
+    /** Rewrite module factories in a `[chunkIds, modules, runtime]` tuple. */
+    private transformChunkModules(items: unknown[]): void {
+        for (const item of items) {
+            if (!Array.isArray(item)) continue;
+            // Standard webpack/rspack chunk shape: modules live at index 1.
+            const modules = item[1];
+            if (modules === null || typeof modules !== "object") continue;
+            const table = modules as Record<string, unknown>;
+            for (const id of Object.keys(table)) {
+                const factory = table[id];
+                if (typeof factory !== "function") continue;
+                const replacement = this.applyFactoryPatches(
+                    id,
+                    factory as ModuleFactory,
+                );
+                if (replacement) table[id] = replacement;
+            }
+        }
+    }
+
+    /** Compile and return a patched factory, or null when none applied. */
+    private applyFactoryPatches(
+        id: string,
+        factory: ModuleFactory,
+    ): ModuleFactory | null {
+        if (this.patchedFactories.has(factory)) return null;
+
+        let source: string;
+        try {
+            source = Function.prototype.toString.call(factory);
+        } catch {
+            return null;
+        }
+
+        let next = source;
+        const applied: string[] = [];
+        for (const patch of this.factoryPatches) {
+            if (!matchesFind(source, patch.find)) continue;
+            patch.replacement.match.lastIndex = 0;
+            const candidate = next.replace(
+                patch.replacement.match,
+                patch.replacement.replace,
+            );
+            if (candidate === next) {
+                log.warn("factory patch had no effect", {
+                    moduleId: id,
+                    plugin: patch.plugin,
+                });
+                continue;
+            }
+            next = candidate;
+            applied.push(patch.plugin);
+        }
+        if (applied.length === 0) return null;
+
+        try {
+            const compiled = compileFactory(next);
+            this.patchedFactories.add(compiled);
+            log.info("patched module factory", {
+                moduleId: id,
+                plugins: applied.join(", "),
+            });
+            return compiled;
+        } catch (e) {
+            log.error("failed to compile patched module factory", {
+                moduleId: id,
+                error: e,
+            });
+            return null;
+        }
     }
 
     /** Poll until the require function is available or `timeoutMs` elapses. */
@@ -215,7 +366,32 @@ class WebpackFinder {
         this.req = null;
         this.exportCache.clear();
         this.warnedNoChunk = false;
+        this.factoryPatches = [];
     }
+}
+
+function matchesFind(source: string, find: string | RegExp): boolean {
+    if (typeof find === "string") return source.includes(find);
+    find.lastIndex = 0;
+    return find.test(source);
+}
+
+/**
+ * Compile a patched factory source.
+ *
+ * rspack stringifies factories as object methods (`123(a, b, c) { … }`),
+ * which are not valid standalone expressions. Drop the method name and add
+ * `function`; arrow factories already start with `(`. Indirect eval keeps the
+ * compiled function in the page's global scope, where the rest of Discord's
+ * modules live.
+ */
+function compileFactory(source: string): ModuleFactory {
+    const trimmed = source.trimStart();
+    const body = trimmed.startsWith("(")
+        ? trimmed
+        : `function${trimmed.slice(trimmed.indexOf("("))}`;
+    const expression = `0,${body}\n//# sourceURL=monocord-module-factory.js`;
+    return (0, eval)(expression) as ModuleFactory;
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {

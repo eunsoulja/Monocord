@@ -18,16 +18,23 @@ import type { Plugin } from "./types";
 /** Discord's React, resolved lazily through webpack. */
 export function getReact(): Promise<Record<string, unknown>> {
     return new Promise((resolve, reject) => {
+        // Discord ships multiple modules with `createElement` (jsx runtimes,
+        // compat shims). Require the full hook surface so we bind the real
+        // React dispatcher — a wrong copy yields `useState` on a null
+        // dispatcher and crashes the renderer.
+        const candidates = [
+            ["createElement", "useState", "useEffect", "createContext"],
+            ["createElement", "useState", "useEffect"],
+            ["createElement", "useEffect"],
+            ["createElement", "Fragment", "useState"],
+        ];
         const tryFind = () => {
-            const react = Webpack.findByProps("createElement", "Fragment");
-            if (react) {
-                resolve(react as Record<string, unknown>);
-                return true;
-            }
-            const alt = Webpack.findByProps("createElement");
-            if (alt) {
-                resolve(alt as Record<string, unknown>);
-                return true;
+            for (const props of candidates) {
+                const react = Webpack.findByProps(...props);
+                if (react) {
+                    resolve(react as Record<string, unknown>);
+                    return true;
+                }
             }
             return false;
         };

@@ -11,9 +11,62 @@ import { Logger } from "../core/logger";
 import { Settings } from "../core/settings";
 import { Themes } from "../core/themes";
 import type { Plugin, Theme } from "../core/types";
-import { Fragment, h, useEffect, useState } from "./react";
+import { h } from "./react";
 
 const log = Logger.get("settings-ui");
+
+/**
+ * Minimal React class-component base, compatible with any reconciler.
+ *
+ * Discord renders the settings tree with its own React copy, so hooks from
+ * our resolved React have a null dispatcher inside CUSTOM components. Class
+ * components avoid hooks entirely: react-dom only requires
+ * `prototype.isReactComponent` + `render`, and it injects `updater` on mount
+ * — `setState` then flows through whichever reconciler owns the tree.
+ */
+class PanelBase {
+    props: Record<string, any>;
+    state: Record<string, any>;
+    refs: Record<string, any> = {};
+    updater: {
+        enqueueSetState?: (
+            inst: PanelBase,
+            partialState: unknown,
+            callback?: () => void,
+            caller?: string,
+        ) => void;
+        enqueueForceUpdate?: (
+            inst: PanelBase,
+            callback?: () => void,
+            caller?: string,
+        ) => void;
+    } | null = null;
+
+    constructor(props?: Record<string, any>) {
+        this.props = props ?? {};
+        this.state = {};
+    }
+
+    setState(
+        update:
+            | Record<string, any>
+            | ((prev: Record<string, any>, props: Record<string, any>) => Record<string, any>),
+        callback?: () => void,
+    ): void {
+        const partial =
+            typeof update === "function" ? update(this.state, this.props) : update;
+        this.updater?.enqueueSetState?.(this, partial, callback, "setState");
+    }
+
+    forceUpdate(callback?: () => void): void {
+        this.updater?.enqueueForceUpdate?.(this, callback, "forceUpdate");
+    }
+
+    render(): unknown {
+        return null;
+    }
+}
+(PanelBase.prototype as { isReactComponent?: object }).isReactComponent = {};
 
 type Style = Record<string, string | number>;
 
@@ -99,25 +152,28 @@ function Badge(props: { ok: boolean; text: string }) {
 // Overview
 // ---------------------------------------------------------------------------
 
-export function OverviewPanel(): unknown {
-    const [info, setInfo] = useState<Record<string, unknown> | null>(null);
-    useEffect(() => {
+export class OverviewPanel extends PanelBase {
+    override state: { info: Record<string, unknown> | null } = { info: null };
+
+    componentDidMount(): void {
         const bridge = (window as { monocord?: { invoke(c: string): Promise<unknown> } })
             .monocord;
         if (bridge) {
             bridge
                 .invoke("version")
-                .then((v) => setInfo(v as Record<string, unknown>))
+                .then((v) => this.setState({ info: v as Record<string, unknown> }))
                 .catch(() => {});
         }
-    }, []);
+    }
 
-    const pluginCount = Api.Plugins.names().length;
-    const enabledCount = Api.Plugins.names().filter((n) =>
-        Api.Plugins.isEnabled(n),
-    ).length;
+    override render(): unknown {
+        const info = this.state.info;
+        const pluginCount = Api.Plugins.names().length;
+        const enabledCount = Api.Plugins.names().filter((n) =>
+            Api.Plugins.isEnabled(n),
+        ).length;
 
-    return h(
+        return h(
         "div",
         { style: S.page },
         h("h2", { style: S.h2 }, "Monocord"),
@@ -146,7 +202,8 @@ export function OverviewPanel(): unknown {
             { style: { ...S.card, ...S.muted } },
             "Monocord is a Vencord-inspired modification framework. Manage plugins and themes from the sidebar.",
         ),
-    );
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -174,16 +231,23 @@ function pluginRows(): { name: string; plugin: Plugin; enabled: boolean; running
         }));
 }
 
-export function PluginsPanel(): unknown {
-    const [, setRev] = useState(0);
-    useEffect(() => {
-        const offs = PLUGIN_EVENTS.map((e) =>
-            Events.on(e, () => setRev((r: number) => r + 1)),
-        );
-        return () => offs.forEach((off) => off());
-    }, []);
+export class PluginsPanel extends PanelBase {
+    override state: { rev: number } = { rev: 0 };
+    private offs: (() => void)[] = [];
 
-    const rows = pluginRows();
+    componentDidMount(): void {
+        this.offs = PLUGIN_EVENTS.map((e) =>
+            Events.on(e, () => this.setState({ rev: this.state.rev + 1 })),
+        );
+    }
+
+    componentWillUnmount(): void {
+        this.offs.forEach((off) => off());
+        this.offs = [];
+    }
+
+    override render(): unknown {
+        const rows = pluginRows();
 
     return h(
         "div",
@@ -225,36 +289,58 @@ export function PluginsPanel(): unknown {
                       ),
                   ),
               ),
-    );
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Themes
 // ---------------------------------------------------------------------------
 
-export function ThemesPanel(): unknown {
-    const [themes, setThemes] = useState<Theme[] | null>(null);
-    const [active, setActive] = useState<string | null>(Themes.active);
-    const [customCss, setCustomCss] = useState("");
-    const [saved, setSaved] = useState(false);
+interface ThemesState {
+    themes: Theme[] | null;
+    active: string | null;
+    customCss: string;
+    saved: boolean;
+}
 
-    useEffect(() => {
-        void Themes.list().then(setThemes);
-        void Settings.get<string>("theme.customCss", "").then((v) =>
-            setCustomCss(v ?? ""),
-        );
-        const offs = [
-            Events.on("theme.changed", () => setActive(Themes.active)),
-            Events.on("settings.changed", () => setSaved(false)),
-        ];
-        return () => offs.forEach((off) => off());
-    }, []);
-
-    const activate = (name: string | null) => {
-        void Themes.activate(name)
-            .then(() => setActive(Themes.active))
-            .catch((e) => log.error("theme activation failed", e));
+export class ThemesPanel extends PanelBase {
+    override state: ThemesState = {
+        themes: null,
+        active: Themes.active,
+        customCss: "",
+        saved: false,
     };
+    private offs: (() => void)[] = [];
+
+    componentDidMount(): void {
+        void Themes.list().then((themes) => this.setState({ themes }));
+        void Settings.get<string>("theme.customCss", "").then((v) =>
+            this.setState({ customCss: v ?? "" }),
+        );
+        this.offs = [
+            Events.on("theme.changed", () =>
+                this.setState({ active: Themes.active }),
+            ),
+            Events.on("settings.changed", () => this.setState({ saved: false })),
+        ];
+    }
+
+    componentWillUnmount(): void {
+        this.offs.forEach((off) => off());
+        this.offs = [];
+    }
+
+    private activate(name: string | null): void {
+        void Themes.activate(name)
+            .then(() => this.setState({ active: Themes.active }))
+            .catch((e) => log.error("theme activation failed", e));
+    }
+
+    override render(): unknown {
+        const { themes, active, customCss, saved } = this.state;
+        const activate = (name: string | null) => this.activate(name);
+        const setCustomCss = (v: string) => this.setState({ customCss: v });
 
     return h(
         "div",
@@ -305,7 +391,7 @@ export function ThemesPanel(): unknown {
                         style: S.btn,
                         onClick: () => {
                             void Themes.setCustomCss(customCss).then(() =>
-                                setSaved(true),
+                                this.setState({ saved: true }),
                             );
                         },
                     },
@@ -320,5 +406,6 @@ export function ThemesPanel(): unknown {
                     setCustomCss(e.target.value),
             }),
         ),
-    );
+        );
+    }
 }

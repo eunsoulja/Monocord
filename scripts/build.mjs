@@ -49,4 +49,10 @@ fs.mkdirSync(dataDist, { recursive: true });
 for (const f of ["main.js", "preload.js", "renderer.js"]) {
     fs.copyFileSync(path.join(root, "dist", f), path.join(dataDist, f));
 }
+// Marker read by `deploy_dist`: a newer dev sync must not be overwritten by
+// an installer built before these bundles.
+fs.writeFileSync(
+    path.join(dataDist, ".monocord-dev"),
+    `${new Date().toISOString()}\n`,
+);
 console.log(`synced dist -> ${dataDist}`);

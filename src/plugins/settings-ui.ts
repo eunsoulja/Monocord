@@ -2,18 +2,23 @@
  * MonocordSettings — built-in infrastructure plugin that injects the
  * Monocord section into Discord's native settings UI.
  *
- * Discord's settings sidebar is driven by a layout tree of nodes
- * (SECTION / SIDEBAR_ITEM / PANEL / CATEGORY / CUSTOM). The root builder
- * object exposes `buildLayout()`; we find it by scanning webpack module
- * exports for an object with `key === "$Root"` (or a layout containing
- * Discord's known section keys) and append-patch `buildLayout` to splice
- * our section in. Discovery retries because Discord lazy-loads the
- * settings modules — they may not exist until the user opens settings.
+ * Discord's settings sidebar is driven by a tree of layout builders
+ * (SECTION / SIDEBAR_ITEM / PANEL / CATEGORY / CUSTOM). The root builder is
+ * not reachable through webpack module exports: Discord's rspack runtime
+ * exposes empty namespace objects for deferred settings modules, and the
+ * settings component binds the directory hook at module-evaluation time.
+ *
+ * The stable hook is the recursive builder walker inside the settings chunk.
+ * Its source contains `.buildLayout().map`; Webpack.patchFactories rewrites
+ * that call to a global hook before the chunk is registered. The hook sees
+ * every builder and only modifies the one with `key === "$Root"`.
+ *
+ * Discovery is source-pattern based (never a module id) and degrades
+ * gracefully: if the pattern changes, the patch simply logs that it did not
+ * apply and Discord's settings UI is untouched.
  */
 
-import { Api } from "../core/api";
 import { Logger } from "../core/logger";
-import { Patcher } from "../core/patcher";
 import type { Plugin } from "../core/types";
 import { Webpack } from "../core/webpack";
 import { ensureReact, h, logReactInfo } from "../ui/react";
@@ -23,150 +28,38 @@ const log = Logger.get("settings-plugin");
 
 export const SETTINGS_PLUGIN_NAME = "MonocordSettings";
 
-// Vencord's observed defaults — used only if the enum module isn't found.
-const FALLBACK_LAYOUT_TYPES: Record<string, number> = {
+/** Global function referenced from the patched Discord factory source. */
+const LAYOUT_HOOK = "__monocord_buildSettingsLayout";
+const ROOT_KEY = "monocord_main";
+
+/**
+ * Discord's layout type enum. The enum module is a deferred namespace and is
+ * not readable through exports, so use Discord's long-standing values.
+ */
+const LAYOUT_TYPES = {
     SECTION: 1,
     SIDEBAR_ITEM: 2,
     PANEL: 3,
     CATEGORY: 5,
     CUSTOM: 19,
-};
+} as const;
 
 type LayoutNode = Record<string, unknown>;
 
-let discoveryActive = false;
-
-// ---------------------------------------------------------------------------
-// Discord module discovery
-// ---------------------------------------------------------------------------
-
-function findLayoutTypes(): Record<string, number> {
-    const candidates = Webpack.findAllByProps(
-        "SECTION",
-        "SIDEBAR_ITEM",
-        "PANEL",
-        "CUSTOM",
-    );
-    for (const mod of candidates) {
-        const e = (mod as Record<string, unknown>).default ?? mod;
-        if (e && typeof e === "object") {
-            const rec = e as Record<string, unknown>;
-            if (
-                typeof rec.SECTION === "number" &&
-                typeof rec.SIDEBAR_ITEM === "number" &&
-                typeof rec.PANEL === "number" &&
-                typeof rec.CUSTOM === "number"
-            ) {
-                log.info("layout types resolved from webpack", {
-                    SECTION: rec.SECTION,
-                    SIDEBAR_ITEM: rec.SIDEBAR_ITEM,
-                    PANEL: rec.PANEL,
-                    CUSTOM: rec.CUSTOM,
-                });
-                return rec as Record<string, number>;
-            }
-        }
-    }
-    log.warn("layout type enum not found — using fallback values");
-    return FALLBACK_LAYOUT_TYPES;
-}
-
-interface Builder {
+interface LayoutBuilder {
     key?: unknown;
-    buildLayout: () => unknown;
+    buildLayout(): unknown;
 }
 
-function isBuilder(v: unknown): v is Builder {
-    return (
-        ((typeof v === "object" && v !== null) || typeof v === "function") &&
-        typeof (v as Builder).buildLayout === "function"
-    );
-}
+type WindowWithHook = typeof window & {
+    [LAYOUT_HOOK]?: (builder: LayoutBuilder) => unknown;
+};
 
-/** Does a buildLayout() result look like Discord's settings root? */
-function looksLikeSettingsRoot(result: unknown): boolean {
-    if (!Array.isArray(result)) return false;
-    const keys = result
-        .map((n) => (n as LayoutNode | null)?.key)
-        .filter((k): k is string => typeof k === "string");
-    return (
-        keys.includes("user_section") ||
-        keys.includes("billing_section") ||
-        keys.includes("utility_section") ||
-        keys.length >= 3
-    );
-}
-
-/**
- * Scan module exports (itself, `.default`, and one level of properties)
- * for the settings layout builder. Returns the "$Root" builder when
- * identifiable, otherwise the first builder whose layout looks like the
- * settings root.
- */
-function findSettingsBuilder(): { builder: Builder; moduleId: string | number } | null {
-    let fallback: { builder: Builder; moduleId: string | number } | null = null;
-    let scanned = 0;
-
-    for (const [id, exports] of Webpack.iterModules()) {
-        scanned++;
-        try {
-            const found = scanExports(exports);
-            if (found?.key === "$Root") {
-                log.info("found $Root settings builder", { moduleId: String(id) });
-                return { builder: found, moduleId: id };
-            }
-            if (found && !fallback) {
-                fallback = { builder: found, moduleId: id };
-                log.info("found settings-like builder (fallback)", {
-                    moduleId: String(id),
-                    key: String(found.key),
-                });
-            }
-        } catch {
-            /* hostile module — skip */
-        }
-    }
-    log.info(`settings builder scan complete: ${scanned} modules`);
-    return fallback;
-}
-
-/** Scan one module's exports for builder candidates. */
-function scanExports(exports: unknown): Builder | null {
-    let fallback: Builder | null = null;
-    const seen = new Set<object>();
-    const queue: unknown[] = [exports];
-    const isObjLike = (v: unknown): v is Record<string, unknown> =>
-        (typeof v === "object" && v !== null) || typeof v === "function";
-
-    if (isObjLike(exports) && "default" in exports) {
-        queue.push(exports.default);
-    }
-    // One level of export properties.
-    if (isObjLike(exports)) {
-        for (const v of Object.values(exports)) {
-            if (isObjLike(v)) queue.push(v);
-        }
-    }
-
-    for (const candidate of queue) {
-        if (!isBuilder(candidate) || seen.has(candidate)) continue;
-        seen.add(candidate);
-        if (candidate.key === "$Root") return candidate;
-        if (!fallback) {
-            try {
-                if (looksLikeSettingsRoot(candidate.buildLayout())) {
-                    fallback = candidate;
-                }
-            } catch {
-                /* not callable in this state */
-            }
-        }
-    }
-    return fallback;
-}
+let active = false;
+let loggedFirstCall = false;
 
 // ---------------------------------------------------------------------------
-// Layout injection
+// Icons & node construction
 // ---------------------------------------------------------------------------
 
 function iconPath(d: string): () => unknown {
@@ -196,27 +89,26 @@ const Icons = {
     ),
 };
 
-function buildEntry(opts: {
+function buildEntry(options: {
     key: string;
     title: string;
     panelTitle?: string;
-    Component: () => unknown;
+    Component: unknown;
     Icon: () => unknown;
-    types: Record<string, number>;
 }): LayoutNode {
-    const { key, title, panelTitle = title, Component, Icon, types } = opts;
+    const { key, title, panelTitle = title, Component, Icon } = options;
     const panel: LayoutNode = {
         key: `${key}_panel`,
-        type: types.PANEL,
+        type: LAYOUT_TYPES.PANEL,
         useTitle: () => panelTitle,
         buildLayout: () => [
             {
-                type: types.CATEGORY,
                 key: `${key}_category`,
+                type: LAYOUT_TYPES.CATEGORY,
                 buildLayout: () => [
                     {
-                        type: types.CUSTOM,
                         key: `${key}_custom`,
+                        type: LAYOUT_TYPES.CUSTOM,
                         Component,
                         useSearchTerms: () => [title],
                     },
@@ -226,98 +118,88 @@ function buildEntry(opts: {
     };
     return {
         key,
-        type: types.SIDEBAR_ITEM,
+        type: LAYOUT_TYPES.SIDEBAR_ITEM,
         useTitle: () => title,
         icon: () => Icon(),
         buildLayout: () => [panel],
     };
 }
 
-/** Build the Monocord section node (fresh each call — nodes may be mutated). */
-function buildSection(types: Record<string, number>): LayoutNode {
-    const entries = [
-        buildEntry({
-            key: "monocord_main",
-            title: "Monocord",
-            panelTitle: "Monocord",
-            Component: OverviewPanel,
-            Icon: Icons.overview,
-            types,
-        }),
-        buildEntry({
-            key: "monocord_plugins",
-            title: "Plugins",
-            Component: PluginsPanel,
-            Icon: Icons.plugins,
-            types,
-        }),
-        buildEntry({
-            key: "monocord_themes",
-            title: "Themes",
-            Component: ThemesPanel,
-            Icon: Icons.themes,
-            types,
-        }),
-    ];
+const SECTION_KEY = "monocord_section";
+
+/** Fresh nodes each render — Discord annotates them with `parent`. */
+function buildSection(): LayoutNode {
     return {
-        key: "monocord_section",
-        type: types.SECTION,
+        key: SECTION_KEY,
+        type: LAYOUT_TYPES.SECTION,
         useTitle: () => "Monocord",
-        buildLayout: () => entries,
+        buildLayout: () => [
+            buildEntry({
+                key: ROOT_KEY,
+                title: "Monocord",
+                panelTitle: "Monocord",
+                Component: OverviewPanel,
+                Icon: Icons.overview,
+            }),
+            buildEntry({
+                key: "monocord_plugins",
+                title: "Plugins",
+                Component: PluginsPanel,
+                Icon: Icons.plugins,
+            }),
+            buildEntry({
+                key: "monocord_themes",
+                title: "Themes",
+                Component: ThemesPanel,
+                Icon: Icons.themes,
+            }),
+        ],
     };
 }
 
-/** Splice our section into Discord's settings layout result. */
-function injectIntoLayout(result: unknown, types: Record<string, number>): unknown {
-    if (!Array.isArray(result)) return result;
-    if (result.some((n) => (n as LayoutNode | null)?.key === "monocord_section")) {
-        return result;
+// ---------------------------------------------------------------------------
+// Factory-source hook
+// ---------------------------------------------------------------------------
+
+/**
+ * Called by the patched walker in place of `builder.buildLayout()`.
+ * Must always return the layout array so the walker can recurse normally.
+ */
+function layoutHook(builder: LayoutBuilder): unknown {
+    const layout = builder.buildLayout();
+    if (!active) return layout;
+
+    if (!loggedFirstCall) {
+        loggedFirstCall = true;
+        log.info("settings layout hook invoked", {
+            key: String(builder.key ?? "<none>"),
+        });
     }
-    const section = buildSection(types);
-    // Prefer above-Nitro placement like Vencord's default: insert before
-    // billing_section; fall back to before user_section, else append.
-    const idx =
-        result.findIndex((n) => (n as LayoutNode | null)?.key === "billing_section") !== -1
-            ? result.findIndex((n) => (n as LayoutNode | null)?.key === "billing_section")
-            : result.findIndex((n) => (n as LayoutNode | null)?.key === "user_section");
-    result.splice(idx === -1 ? result.length : idx, 0, section);
-    return result;
+
+    if (builder.key !== "$Root" || !Array.isArray(layout)) return layout;
+    if (layout.some((node) => (node as LayoutNode | null)?.key === SECTION_KEY)) {
+        return layout;
+    }
+
+    const section = buildSection();
+    // Prefer above the Nitro/billing group, like Vencord's default. Fall
+    // back to above the account section, then to the end.
+    const billing = layout.findIndex(
+        (node) => (node as LayoutNode | null)?.key === "billing_section",
+    );
+    const user = layout.findIndex(
+        (node) => (node as LayoutNode | null)?.key === "user_section",
+    );
+    const insertAt = billing !== -1 ? billing : user;
+    layout.splice(insertAt === -1 ? layout.length : insertAt, 0, section);
+
+    log.info("settings layout injected", { insertAt });
+    return layout;
 }
 
 // ---------------------------------------------------------------------------
 // Plugin lifecycle
 // ---------------------------------------------------------------------------
-
-async function discoverAndInstall(): Promise<void> {
-    while (discoveryActive) {
-        try {
-            await ensureReact();
-            const found = findSettingsBuilder();
-            if (found) {
-                const types = findLayoutTypes();
-                logReactInfo();
-                try {
-                    Patcher.after(
-                        SETTINGS_PLUGIN_NAME,
-                        found.builder,
-                        "buildLayout",
-                        (result: unknown) => injectIntoLayout(result, types),
-                    );
-                    log.info("settings layout patch installed", {
-                        moduleId: String(found.moduleId),
-                    });
-                    return;
-                } catch (e) {
-                    log.error("failed to patch buildLayout", e);
-                    return;
-                }
-            }
-        } catch (e) {
-            log.debug("discovery pass failed", e);
-        }
-        await new Promise((r) => setTimeout(r, 3000));
-    }
-}
 
 export const SettingsUIPlugin: Plugin = {
     name: SETTINGS_PLUGIN_NAME,
@@ -326,12 +208,35 @@ export const SettingsUIPlugin: Plugin = {
     version: "0.1.0",
 
     start() {
-        if (discoveryActive) return;
-        discoveryActive = true;
-        void discoverAndInstall();
+        if (active) return;
+        active = true;
+        (window as WindowWithHook)[LAYOUT_HOOK] = layoutHook;
+
+        try {
+            // Discord's settings walker: `builder.buildLayout().map(walk)`.
+            // Rewrite the call, not the module id — Discord is free to move
+            // the builder as long as the walker keeps this shape.
+            Webpack.patchFactories({
+                plugin: SETTINGS_PLUGIN_NAME,
+                find: ".buildLayout().map",
+                replacement: {
+                    match: /([A-Za-z_$][\w$]*)\.buildLayout\(\)(?=\.map)/g,
+                    replace: `(0,window.${LAYOUT_HOOK})($1)`,
+                },
+            });
+            log.info("settings layout factory patch installed");
+        } catch (e) {
+            log.error("failed to install settings layout factory patch", e);
+        }
+
+        void ensureReact()
+            .then(() => logReactInfo())
+            .catch((e) => log.error("React not available for settings UI", e));
     },
 
     stop() {
-        discoveryActive = false;
+        // The compiled factories still call the hook; leave it in place and
+        // make it a passthrough so disabling the plugin is non-destructive.
+        active = false;
     },
 };

@@ -122,4 +122,90 @@ describe("Webpack finder", () => {
         expect(Webpack.findByProps("zzz")).toBeUndefined();
         expect(Webpack.findAllByProps("zzz")).toEqual([]);
     });
+
+    it("patches factories already registered before the patch", () => {
+        const modules: Record<string, unknown> = {
+            "settings-walker"(m: unknown, e: Record<string, unknown>) {
+                void m;
+                const builder = {
+                    key: "$Root",
+                    buildLayout: () => [{ key: "a" }, { key: "b" }],
+                };
+                e.keys = builder.buildLayout().map((n: { key: string }) => n.key);
+            },
+        };
+        installFakeWindow(makeWebpackRuntime(modules));
+        expect(Webpack.ensure()).toBe(true);
+
+        const hook = vi.fn(() => [{ key: "injected" }]);
+        (globalThis as Record<string, unknown>).__mcTestHook = hook;
+        const patched = Webpack.patchFactories({
+            plugin: "test",
+            find: ".buildLayout().map",
+            replacement: {
+                match: /([A-Za-z_$][\w$]*)\.buildLayout\(\)(?=\.map)/g,
+                replace: "(0,globalThis.__mcTestHook)($1)",
+            },
+        });
+
+        expect(patched).toBe(1);
+        const exports = Webpack.getExports("settings-walker") as {
+            keys?: string[];
+        };
+        expect(hook).toHaveBeenCalledOnce();
+        expect(exports.keys).toEqual(["injected"]);
+    });
+
+    it("patches factories in chunks registered after the patch", () => {
+        const modules: Record<string, unknown> = {};
+        const req = makeWebpackRuntime(modules);
+        const chunks = installFakeWindow(req);
+        // Override the fake push with a real jsonp-style handler that
+        // registers the chunk's module table.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (chunks as any).push = function (this: unknown[], item: unknown[]) {
+            Object.assign(modules, item[1] as Record<string, unknown>);
+            const runtime = item[2];
+            if (typeof runtime === "function") runtime(req);
+            return Array.prototype.push.call(this, item);
+        };
+        expect(Webpack.ensure()).toBe(true);
+
+        const hook = vi.fn(() => [{ key: "lazy-injected" }]);
+        (globalThis as Record<string, unknown>).__mcTestHook = hook;
+        Webpack.patchFactories({
+            plugin: "test",
+            find: ".buildLayout().map",
+            replacement: {
+                match: /([A-Za-z_$][\w$]*)\.buildLayout\(\)(?=\.map)/g,
+                replace: "(0,globalThis.__mcTestHook)($1)",
+            },
+        });
+
+        chunks.push([
+            ["lazy-chunk"],
+            {
+                "lazy-settings-walker"(
+                    m: unknown,
+                    e: Record<string, unknown>,
+                ) {
+                    void m;
+                    const builder = {
+                        key: "$Root",
+                        buildLayout: () => [{ key: "c" }],
+                    };
+                    e.keys = builder
+                        .buildLayout()
+                        .map((n: { key: string }) => n.key);
+                },
+            },
+            () => {},
+        ]);
+
+        const exports = Webpack.getExports("lazy-settings-walker") as {
+            keys?: string[];
+        };
+        expect(hook).toHaveBeenCalledOnce();
+        expect(exports.keys).toEqual(["lazy-injected"]);
+    });
 });

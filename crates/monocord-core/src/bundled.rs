@@ -6,9 +6,13 @@
 //! are embedded and `deploy_dist` refuses.
 
 use std::path::Path;
+use std::time::SystemTime;
 
 use crate::config::ConfigPaths;
 use crate::error::{Error, Result};
+
+/// Written by `pnpm build` after syncing bundles into the data dir.
+const DEV_MARKER: &str = ".monocord-dev";
 
 static MAIN_JS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/main.js"));
 static PRELOAD_JS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/preload.js"));
@@ -28,11 +32,40 @@ pub fn bundles_embedded() -> bool {
     FILES.iter().all(|(_, b)| !b.starts_with(STUB_MARKER))
 }
 
+fn modified(path: &Path) -> Option<SystemTime> {
+    path.metadata().ok()?.modified().ok()
+}
+
+/// Whether `pnpm build` synced bundles after this executable was built.
+///
+/// Development flow is `pnpm build` (writes bundles + marker) followed by
+/// `cargo build`. Running an older installer in between must not clobber the
+/// fresh bundles with the stale ones embedded in the executable.
+fn has_newer_dev_sync(dist_dir: &Path) -> bool {
+    let Some(marker) = modified(&dist_dir.join(DEV_MARKER)) else {
+        return false;
+    };
+    let Some(exe) = std::env::current_exe()
+        .ok()
+        .and_then(|path| modified(&path))
+    else {
+        return false;
+    };
+    marker > exe
+}
+
 /// Write the embedded bundles to `<data>/dist/`.
 pub fn deploy_dist(paths: &ConfigPaths) -> Result<()> {
     let dist_dir = paths.root.join("dist");
     std::fs::create_dir_all(&dist_dir)
         .map_err(|e| Error::UnsafeOperation(format!("creating {}: {e}", dist_dir.display())))?;
+
+    let all_present = FILES.iter().all(|(name, _)| dist_dir.join(name).is_file());
+    if all_present && has_newer_dev_sync(&dist_dir) {
+        tracing::info!("dist has a newer dev sync — keeping deployed bundles");
+        return Ok(());
+    }
+
     for (name, bytes) in FILES {
         if bytes.starts_with(STUB_MARKER) {
             return Err(Error::UnsafeOperation(

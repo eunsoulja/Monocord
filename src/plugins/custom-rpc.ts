@@ -89,7 +89,10 @@ async function readSettings(): Promise<Record<string, unknown>> {
 function buildActivity(s: Record<string, unknown>): Record<string, unknown> | null {
     const appName = String(s.appName ?? "").trim();
     const appId = String(s.appId ?? "").trim();
-    if (!appName && !appId) return null;
+    // Vencord parity: the flux path only needs a name; application_id
+    // falls back to "0". A real app id is still needed for the IPC
+    // fallback and app-icon images.
+    if (!appName) return null;
 
     const activity: Record<string, unknown> = {
         application_id: appId || "0",
@@ -430,14 +433,34 @@ function val0(ctx: PluginSettingsViewContext, key: string): unknown {
 
 let dispatcher: Dispatcher | null | undefined;
 
+let warnedMissingAppId = false;
+
 async function pushConfig(): Promise<void> {
     const s = await readSettings();
     const enabled = s.enabled !== false;
+    const appIdMissing = !String(s.appId ?? "").trim();
+    if (enabled && appIdMissing && !warnedMissingAppId) {
+        warnedMissingAppId = true;
+        log.warn(
+            "CustomRPC: Application ID is empty — the IPC fallback and " +
+                "app-icon images won't work. Create an app at " +
+                "discord.com/developers/applications for full features.",
+        );
+    } else if (!appIdMissing) {
+        warnedMissingAppId = false;
+    }
     const activity = enabled ? buildActivity(s) : null;
 
     // Primary path: Discord's own flux dispatcher (full feature set —
     // buttons, urls, party). Dispatch null to clear.
-    if (dispatcher === undefined) dispatcher = findDispatcher();
+    if (dispatcher === undefined) {
+        dispatcher = findDispatcher();
+        log.info(
+            dispatcher?.dispatch
+                ? "flux dispatcher found — LOCAL_ACTIVITY_UPDATE active"
+                : "flux dispatcher NOT found — IPC fallback only",
+        );
+    }
     if (dispatcher?.dispatch) {
         dispatcher.dispatch({
             type: "LOCAL_ACTIVITY_UPDATE",
@@ -646,10 +669,13 @@ export const CustomRPC: Plugin = {
 
         // -- validation hints (Vencord's isValid rules, simplified) ------
         const appId = str("appId").trim();
-        const appIdWarn =
-            appId && !/^\d{5,25}$/.test(appId)
-                ? warn("Application ID must be numeric (5–25 digits).")
-                : null;
+        const appIdWarn = !appId
+            ? warn(
+                  "Required — create an app at discord.com/developers/applications and paste its Application ID. Without it the presence won't show.",
+              )
+            : !/^\d{5,25}$/.test(appId)
+              ? warn("Application ID must be numeric (5–25 digits).")
+              : null;
         const urlWarn = (key: string) => {
             const v = str(key).trim();
             return v && !/^https?:\/\//.test(v)
@@ -711,7 +737,7 @@ export const CustomRPC: Plugin = {
                 [
                     "App name",
                     input("appName", { placeholder: "Spotify" }),
-                    hint("Shown as the activity title. Required."),
+                    hint("Shown as the activity title."),
                 ],
             ),
 

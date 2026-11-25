@@ -31,32 +31,41 @@ export interface Dispatcher {
 }
 
 export function findDispatcher(): Dispatcher | null {
-    const looksLike = (o: unknown): o is Dispatcher => {
-        if (!isObj(o)) return false;
-        const d = o as unknown as Dispatcher;
-        return (
-            typeof d.subscribe === "function" &&
-            (typeof d.dispatch === "function" ||
-                "_actionHandlers" in o ||
-                "_subscriptions" in o ||
-                "_actionHandlerSubscribers" in o)
-        );
+    // Discord's real FluxDispatcher is identifiable by its internals —
+    // _actionHandlers/_subscriptions/_isFlushing — not just subscribe+dispatch
+    // (stores and event emitters match the loose shape too).
+    const score = (o: unknown): number => {
+        if (!isObj(o)) return 0;
+        const d = o as unknown as Record<string, unknown>;
+        let s = 0;
+        if (typeof d.dispatch === "function") s += 1;
+        if (typeof d.subscribe === "function") s += 1;
+        if ("_actionHandlers" in d) s += 4;
+        if ("_subscriptions" in d) s += 4;
+        if ("_actionHandlerSubscribers" in d) s += 2;
+        if ("_isFlushing" in d) s += 2;
+        if (typeof d.waitFor === "function") s += 1;
+        return s;
     };
+    const looksLike = (o: unknown): o is Dispatcher => score(o) >= 3;
     const found = Api.Webpack.findAll((exp) => {
         if (looksLike(exp)) return true;
         if (isObj(exp) && looksLike(exp.default)) return true;
         return false;
     });
+    let best: Dispatcher | null = null;
+    let bestScore = 0;
     for (const exp of found) {
-        const direct = looksLike(exp) ? exp : undefined;
-        const viaDefault = isObj(exp) ? exp.default : undefined;
-        const d = (direct ??
-            (looksLike(viaDefault) ? viaDefault : undefined)) as
-            | Dispatcher
-            | undefined;
-        if (d) return d;
+        const candidates = [exp, isObj(exp) ? exp.default : undefined];
+        for (const c of candidates) {
+            const s = score(c);
+            if (s > bestScore && looksLike(c)) {
+                bestScore = s;
+                best = c as Dispatcher;
+            }
+        }
     }
-    return null;
+    return best;
 }
 
 /** Find the flux store for `displayName` (e.g. "MessageStore"). */

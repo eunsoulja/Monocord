@@ -93,25 +93,37 @@ function findFetchAssetIds(): FetchAssetIds | null {
     if (assetUtilsTried) return null;
     assetUtilsTried = true;
     try {
-        const mod = Api.Webpack.findByCode("getAssetImage: size must === [");
-        const candidates: unknown[] = [];
-        if (mod && typeof mod === "object") {
-            candidates.push(mod, (mod as Record<string, unknown>).default);
-        } else {
-            candidates.push(mod);
+        const mods = Api.Webpack.findAllByCode("getAssetImage: size must === [");
+        logAsset(`asset utils: ${mods.length} candidate module(s)`);
+        // Collect candidate objects: the exports themselves, .default,
+        // and one level of nested export objects (rspack namespaces).
+        const candidates: Record<string, unknown>[] = [];
+        const push = (v: unknown) => {
+            if (v && typeof v === "object") {
+                candidates.push(v as Record<string, unknown>);
+            }
+        };
+        for (const mod of mods) {
+            push(mod);
+            const m = mod as Record<string, unknown>;
+            push(m.default);
+            for (const v of Object.values(m)) push(v);
+            const d = m.default as Record<string, unknown> | undefined;
+            if (d) for (const v of Object.values(d)) push(v);
         }
         for (const c of candidates) {
-            if (!c || typeof c !== "object") continue;
-            for (const v of Object.values(c as Record<string, unknown>)) {
+            for (const v of Object.values(c)) {
                 if (typeof v !== "function") continue;
                 const src = Function.prototype.toString.call(v);
-                if (/startsWith\(["']http:/.test(src)) {
+                // Vencord's filter for fetchAssetIds: startsWith("http:") + dispatch(
+                if (/startsWith\(["'`]http:/.test(src) && src.includes("dispatch(")) {
                     fetchAssetIds = v as FetchAssetIds;
-                    log.info("asset utils found — image keys will be resolved");
+                    logAsset("asset utils found — image keys will be resolved");
                     return fetchAssetIds;
                 }
             }
         }
+        logAsset("asset utils: fetchAssetIds not found in candidates");
     } catch (e) {
         log.warn("asset utils lookup failed", e);
     }

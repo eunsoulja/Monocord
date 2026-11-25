@@ -370,7 +370,38 @@ class WebpackFinder {
     }
 
     /**
-     * Find exports of the first module whose factory source contains `code`.
+     * Find exports of every module whose factory source contains `code`.
+     * For modules with mangled export names that can only be located by
+     * their internals. Misses are not cached — lazy chunks may register
+     * the factory later.
+     */
+    findAllByCode(code: string | RegExp): unknown[] {
+        const key = `allcode:${String(code)}`;
+        return (
+            this.cached(key, () => {
+                const req = this.require_();
+                const out: unknown[] = [];
+                for (const id of Object.keys(req.m ?? {})) {
+                    const factory = (req.m as Record<string, unknown>)[id];
+                    if (typeof factory !== "function") continue;
+                    let source: string;
+                    try {
+                        source = Function.prototype.toString.call(factory);
+                    } catch {
+                        continue;
+                    }
+                    if (!matchesFind(source, code)) continue;
+                    const exports = this.getExports(id);
+                    if (exports !== undefined) out.push(exports);
+                }
+                // Return undefined on empty so the miss isn't memoized —
+                // the module may live in a lazy chunk that loads later.
+                return out.length ? out : undefined;
+            }) ?? []
+        );
+    }
+
+    /** Find exports of the first module whose factory source contains `code`.
      * For modules with mangled export names that can only be located by
      * their internals. Misses are not cached — lazy chunks may register
      * the factory later.

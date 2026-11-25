@@ -188,7 +188,14 @@ export class OverviewPanel extends PanelBase {
             ["Discord", String(info?.discord ?? "unknown")],
             ["Host", "Electron"],
             ["Plugins", `${enabledCount} enabled / ${pluginCount}`],
-            ["Theme", Themes.active ?? "None"],
+            [
+                "Theme",
+                Themes.enabled.length === 0
+                    ? "None"
+                    : Themes.enabled.length === 1
+                      ? (Themes.enabled[0] ?? "")
+                      : `${Themes.enabled.length} enabled`,
+            ],
         ];
 
         return h(
@@ -810,7 +817,8 @@ export class PluginsPanel extends PanelBase {
 
 interface ThemesState {
     themes: Theme[] | null;
-    active: string | null;
+    enabled: string[];
+    quickCss: boolean;
     customCss: string;
     saved: boolean;
 }
@@ -818,7 +826,8 @@ interface ThemesState {
 export class ThemesPanel extends PanelBase {
     override state: ThemesState = {
         themes: null,
-        active: Themes.active,
+        enabled: [...Themes.enabled],
+        quickCss: Themes.quickCss,
         customCss: "",
         saved: false,
     };
@@ -832,7 +841,7 @@ export class ThemesPanel extends PanelBase {
         );
         this.offs = [
             Events.on("theme.changed", () =>
-                this.setState({ active: Themes.active }),
+                this.setState({ enabled: [...Themes.enabled] }),
             ),
             Events.on("settings.changed", () => this.setState({ saved: false })),
         ];
@@ -843,28 +852,25 @@ export class ThemesPanel extends PanelBase {
         this.offs = [];
     }
 
-    private activate(name: string | null): void {
-        void Themes.activate(name)
-            .then(() => this.setState({ active: Themes.active }))
-            .catch((e) => log.error("theme activation failed", e));
-    }
-
-    private renderThemeToggle(name: string, isActive: boolean): unknown {
+    private renderThemeToggle(name: string, isEnabled: boolean): unknown {
         return h(
             "button",
             {
-                className: `mc-toggle${isActive ? " on" : ""}`,
+                className: `mc-toggle${isEnabled ? " on" : ""}`,
                 role: "switch",
-                "aria-checked": isActive,
-                title: isActive ? "Disable theme" : "Apply theme",
-                onClick: () => this.activate(isActive ? null : name),
+                "aria-checked": isEnabled,
+                title: isEnabled ? "Disable theme" : "Enable theme",
+                onClick: () =>
+                    void Themes.toggle(name)
+                        .then(() => this.setState({ enabled: [...Themes.enabled] }))
+                        .catch((e) => log.error("theme toggle failed", e)),
             },
             h("span", null),
         );
     }
 
     override render(): unknown {
-        const { themes, active, customCss, saved } = this.state;
+        const { themes, enabled, quickCss, customCss, saved } = this.state;
         const setCustomCss = (v: string) => this.setState({ customCss: v });
 
     return h(
@@ -887,17 +893,20 @@ export class ThemesPanel extends PanelBase {
                 : themes.length === 0
                   ? h("div", { style: S.muted }, "No themes installed.")
                   : themes.map((t) => {
-                        const isActive = active === t.name;
+                        const isEnabled = enabled.includes(t.name);
                         return h(
                             "div",
-                            { key: t.name, className: "mc-card" },
+                            {
+                                key: t.name,
+                                className: `mc-card${isEnabled ? "" : " mc-card-off"}`,
+                            },
                             h(
                                 "div",
                                 { className: "mc-head" },
                                 h(
                                     "div",
                                     { className: "mc-head-l" },
-                                    statusDot(isActive, isActive),
+                                    statusDot(isEnabled, isEnabled),
                                     h(
                                         "div",
                                         null,
@@ -905,6 +914,9 @@ export class ThemesPanel extends PanelBase {
                                             "div",
                                             { className: "mc-name" },
                                             t.label ?? t.name,
+                                            t.version
+                                                ? h("span", { className: "mc-ver" }, `v${t.version}`)
+                                                : null,
                                         ),
                                         t.authors?.length
                                             ? h(
@@ -915,12 +927,12 @@ export class ThemesPanel extends PanelBase {
                                             : null,
                                     ),
                                 ),
-                                this.renderThemeToggle(t.name, isActive),
+                                this.renderThemeToggle(t.name, isEnabled),
                             ),
                             h(
                                 "div",
                                 { className: "mc-desc", style: { minHeight: 0 } },
-                                t.name,
+                                t.description ?? t.name,
                             ),
                         );
                     }),
@@ -933,16 +945,35 @@ export class ThemesPanel extends PanelBase {
                 { className: "mc-head", style: { marginBottom: 8 } },
                 h("div", { className: "mc-name", style: { fontSize: 14 } }, "Custom CSS"),
                 h(
-                    "button",
-                    {
-                        style: S.btn,
-                        onClick: () => {
-                            void Themes.setCustomCss(customCss).then(() =>
-                                this.setState({ saved: true }),
-                            );
+                    "div",
+                    { className: "mc-head-l" },
+                    h(
+                        "button",
+                        {
+                            className: `mc-toggle${quickCss ? " on" : ""}`,
+                            role: "switch",
+                            "aria-checked": quickCss,
+                            title: quickCss ? "Disable custom CSS" : "Enable custom CSS",
+                            onClick: () => {
+                                const next = !quickCss;
+                                this.setState({ quickCss: next });
+                                void Themes.setQuickCssEnabled(next);
+                            },
                         },
-                    },
-                    saved ? "Saved ✓" : "Save",
+                        h("span", null),
+                    ),
+                    h(
+                        "button",
+                        {
+                            style: S.btn,
+                            onClick: () => {
+                                void Themes.setCustomCss(customCss).then(() =>
+                                    this.setState({ saved: true }),
+                                );
+                            },
+                        },
+                        saved ? "Saved ✓" : "Save",
+                    ),
                 ),
             ),
             h("textarea", {

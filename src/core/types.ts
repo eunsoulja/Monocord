@@ -54,13 +54,21 @@ export interface PluginManifest {
 
 /** A registered theme. */
 export interface Theme {
-    /** Unique theme id (directory name). */
+    /** Unique theme id (directory name or file name). */
     name: string;
     /** Human-readable label. */
     label?: string;
     /** Author(s). */
     authors?: string[]
-    /** Raw CSS applied while the theme is active. */
+    /** Description parsed from the theme's `/** ... *\/` header. */
+    description?: string;
+    /** Version parsed from the theme header. */
+    version?: string;
+    /** Theme website parsed from the theme header. */
+    website?: string;
+    /** Discord invite code parsed from the theme header. */
+    invite?: string;
+    /** Raw CSS applied while the theme is enabled. */
     css: string;
 }
 

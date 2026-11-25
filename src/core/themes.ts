@@ -1,11 +1,14 @@
 /**
- * Theme engine (renderer side).
+ * Theme engine (renderer side), modeled on Vencord's api/Themes.
  *
- * Themes are CSS payloads fetched from the Monocord main process over IPC
- * (`theme:get`/`themes:list`). Applying a theme swaps the contents of a
- * dedicated <style> element — no Discord restart needed.
+ * Multiple themes can be enabled at once — their CSS is concatenated in
+ * enable order into a single <style> element (later themes win conflicts,
+ * same as Vencord's stacked @imports). QuickCSS (user custom CSS) lives in
+ * a separate style element with its own on/off toggle.
  *
- * The active theme id and user CSS persist through the Settings store.
+ * Theme css is fetched from the Monocord main process over IPC
+ * (`theme:get`/`themes:list`). Enabled themes, QuickCSS state and custom
+ * CSS persist through the Settings store.
  */
 
 import { Events } from "./events";
@@ -17,8 +20,12 @@ const log = Logger.get("themes");
 
 const STYLE_ID = "monocord-theme";
 const CUSTOM_STYLE_ID = "monocord-custom-css";
-const SETTINGS_THEME = "theme.active";
+const SETTINGS_ENABLED = "theme.enabled";
+const SETTINGS_ACTIVE = "theme.active"; // legacy single-theme key
 const SETTINGS_CUSTOM_CSS = "theme.customCss";
+const SETTINGS_QUICK_CSS = "theme.quickCss";
+const SETTINGS_DEFAULT_APPLIED = "theme.defaultApplied";
+const DEFAULT_THEME = "system24";
 
 /** Bridge to the main process, injected by the preload script. */
 export interface ThemeBridge {
@@ -48,22 +55,47 @@ function setCss(id: string, css: string): void {
     ensureStyle(id).textContent = css;
 }
 
-export const Themes = {
-    /** Currently applied theme name, if any. */
-    active: null as string | null,
+/** Extract @import rules so they can be hoisted to the top of the sheet. */
+function splitImports(css: string): { imports: string[]; body: string } {
+    const imports: string[] = [];
+    const body = css
+        .split("\n")
+        .filter((line) => {
+            const t = line.trim();
+            if (/^@import\b/.test(t)) {
+                imports.push(t);
+                return false;
+            }
+            return true;
+        })
+        .join("\n");
+    return { imports, body };
+}
 
-    /** Apply raw CSS as the active theme (no persistence). */
-    applyCss(css: string, name = "custom"): void {
-        this.active = name;
-        setCss(STYLE_ID, css);
-        Events.emit("theme.changed", { name });
+export const Themes = {
+    /** Currently enabled theme names, in apply order. */
+    enabled: [] as string[],
+    /** QuickCSS (custom CSS) toggle — Vencord's `useQuickCss`. */
+    quickCss: true,
+    /** Custom CSS payload (cached for re-application). */
+    customCss: "",
+    /** Legacy compat: first enabled theme, if any. */
+    get active(): string | null {
+        return this.enabled[0] ?? null;
     },
 
-    /** Clear the active theme. */
+    /** Apply raw CSS as the only enabled theme (no persistence). */
+    applyCss(css: string, name = "custom"): void {
+        this.enabled = [name];
+        void this.reapply();
+        Events.emit("theme.changed", { enabled: this.enabled });
+    },
+
+    /** Clear all enabled themes. */
     clear(): void {
-        this.active = null;
-        setCss(STYLE_ID, "");
-        Events.emit("theme.changed", { name: null });
+        this.enabled = [];
+        void this.reapply();
+        Events.emit("theme.changed", { enabled: [] });
     },
 
     /** List themes known to the main process. */
@@ -77,52 +109,103 @@ export const Themes = {
         }
     },
 
-    /** Activate a theme by name; persists the choice. */
-    async activate(name: string | null): Promise<void> {
-        if (name === null) {
-            this.clear();
-            await Settings.set(SETTINGS_THEME, null);
-            return;
-        }
-        if (!bridge) throw new Error("theme bridge unavailable");
-        const css = await bridge.getThemeCss(name);
-        if (css === null) throw new Error(`theme not found: ${name}`);
-        this.applyCss(css, name);
-        await Settings.set(SETTINGS_THEME, name);
+    /** Toggle a theme in the enabled set; persists the choice. */
+    async toggle(name: string): Promise<void> {
+        const idx = this.enabled.indexOf(name);
+        if (idx >= 0) this.enabled.splice(idx, 1);
+        else this.enabled.push(name);
+        this.enabled = [...this.enabled];
+        await this.reapply();
+        await Settings.set(SETTINGS_ENABLED, this.enabled);
+        Events.emit("theme.changed", { enabled: this.enabled });
     },
 
-    /** Re-apply the persisted theme + custom CSS (called on framework start). */
+    /** Replace the enabled set with a single theme (legacy activate). */
+    async activate(name: string | null): Promise<void> {
+        this.enabled = name === null ? [] : [name];
+        await this.reapply();
+        await Settings.set(SETTINGS_ENABLED, this.enabled);
+        Events.emit("theme.changed", { enabled: this.enabled });
+    },
+
+    /** Set QuickCSS on/off (Vencord's useQuickCss setting). */
+    async setQuickCssEnabled(on: boolean): Promise<void> {
+        this.quickCss = on;
+        setCss(CUSTOM_STYLE_ID, on ? this.customCss : "");
+        await Settings.set(SETTINGS_QUICK_CSS, on);
+    },
+
+    /** Set user custom CSS (QuickCSS — appended after enabled themes). */
+    async setCustomCss(css: string): Promise<void> {
+        this.customCss = css;
+        setCss(CUSTOM_STYLE_ID, this.quickCss ? css : "");
+        await Settings.set(SETTINGS_CUSTOM_CSS, css);
+    },
+
+    /** Fetch + concatenate all enabled theme CSS and apply it. */
+    async reapply(): Promise<void> {
+        if (!bridge) return;
+        const imports: string[] = [];
+        const bodies: string[] = [];
+        const seenImports = new Set<string>();
+        for (const name of this.enabled) {
+            try {
+                const css = await bridge.getThemeCss(name);
+                if (css === null) {
+                    log.warn(`theme not found: ${name}`);
+                    continue;
+                }
+                const { imports: im, body } = splitImports(css);
+                for (const i of im) {
+                    if (!seenImports.has(i)) {
+                        seenImports.add(i);
+                        imports.push(i);
+                    }
+                }
+                bodies.push(`/* --- theme: ${name} --- */\n${body}`);
+            } catch (e) {
+                log.error(`theme ${name} failed`, e);
+            }
+        }
+        // @import must precede all other rules — hoist them to the top.
+        setCss(STYLE_ID, `${imports.join("\n")}\n${bodies.join("\n")}`);
+    },
+
+    /** Re-apply persisted themes + QuickCSS (called on framework start). */
     async restore(): Promise<void> {
         await Settings.ready();
-        const custom = await Settings.get<string>(SETTINGS_CUSTOM_CSS, "");
-        if (custom) setCss(CUSTOM_STYLE_ID, custom);
-        const active = await Settings.get<string | null>(SETTINGS_THEME, null);
-        if (active) {
-            try {
-                await this.activate(active);
-            } catch (e) {
-                log.warn(`could not restore theme "${active}"`, e);
-            }
-        } else if (!(await Settings.get<boolean>("theme.defaultApplied", false))) {
-            // First run with no chosen theme: apply the bundled default once.
-            await Settings.set("theme.defaultApplied", true);
-            try {
-                await this.activate("system24");
-            } catch (e) {
-                log.warn("could not apply default theme", e);
-            }
-        }
-    },
+        this.customCss =
+            (await Settings.get<string>(SETTINGS_CUSTOM_CSS, "")) ?? "";
+        this.quickCss =
+            (await Settings.get<boolean>(SETTINGS_QUICK_CSS, true)) ?? true;
+        setCss(CUSTOM_STYLE_ID, this.quickCss ? this.customCss : "");
 
-    /** Set user custom CSS (appended after the active theme). */
-    async setCustomCss(css: string): Promise<void> {
-        setCss(CUSTOM_STYLE_ID, css);
-        await Settings.set(SETTINGS_CUSTOM_CSS, css);
+        let enabled =
+            (await Settings.get<string[]>(SETTINGS_ENABLED, [])) ?? [];
+        // Migrate the legacy single-theme key.
+        if (enabled.length === 0) {
+            const legacy = await Settings.get<string | null>(SETTINGS_ACTIVE, null);
+            if (legacy) enabled = [legacy];
+        }
+
+        if (!(await Settings.get<boolean>(SETTINGS_DEFAULT_APPLIED, false))) {
+            // First run on this version: make the bundled default theme the
+            // active choice once. Previously-chosen themes stay in the list
+            // and can be re-enabled; the flag prevents re-applying after the
+            // user opts out.
+            await Settings.set(SETTINGS_DEFAULT_APPLIED, true);
+            enabled = [DEFAULT_THEME];
+        }
+
+        this.enabled = enabled;
+        await Settings.set(SETTINGS_ENABLED, enabled);
+        await this.reapply();
+        Events.emit("theme.changed", { enabled });
     },
 
     /**
      * Inject CSS owned by a plugin under a unique id. Independent of the
-     * active theme and custom CSS — several plugins can coexist.
+     * enabled themes and QuickCSS — several plugins can coexist.
      */
     injectCss(id: string, css: string): void {
         setCss(`monocord-plugin-${id}`, css);

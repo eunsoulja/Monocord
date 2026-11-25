@@ -298,6 +298,159 @@ function setPath(obj: Record<string, unknown>, pathParts: string[], value: unkno
 }
 
 // ---------------------------------------------------------------------------
+// CSP relaxation — ported from Vencord's main/csp.
+//
+// Discord's CSP blocks the remote assets themes need (fonts, github.io css,
+// cdn images). Vencord rewrites the Content-Security-Policy response header
+// on mainFrame navigations to whitelist theme hosts and allow inline
+// styles/scripts. Without this, themes only partially apply.
+// ---------------------------------------------------------------------------
+
+type PolicyMap = Record<string, string[]>;
+
+const CSP_IMAGE_CSS_SRC = ["style-src", "font-src"];
+const CSP_IMAGE_AND_CSS_SRC = [
+    "connect-src",
+    "img-src",
+    ...CSP_IMAGE_CSS_SRC,
+];
+const CSP_IMAGE_MEDIA_SRC = ["connect-src", "img-src", "media-src"];
+
+const CSP_POLICIES: Record<string, string[]> = {
+    "localhost:*": CSP_IMAGE_AND_CSS_SRC,
+    "127.0.0.1:*": CSP_IMAGE_AND_CSS_SRC,
+    "*.github.io": CSP_IMAGE_AND_CSS_SRC,
+    "github.com": CSP_IMAGE_AND_CSS_SRC,
+    "raw.githubusercontent.com": CSP_IMAGE_AND_CSS_SRC,
+    "*.gitlab.io": CSP_IMAGE_AND_CSS_SRC,
+    "gitlab.com": CSP_IMAGE_AND_CSS_SRC,
+    "*.codeberg.page": CSP_IMAGE_AND_CSS_SRC,
+    "codeberg.org": CSP_IMAGE_AND_CSS_SRC,
+    "*.githack.com": CSP_IMAGE_AND_CSS_SRC,
+    "jsdelivr.net": CSP_IMAGE_AND_CSS_SRC,
+    "cdn.jsdelivr.net": [...CSP_IMAGE_AND_CSS_SRC, "script-src", "worker-src"],
+    "cdnjs.cloudflare.com": [
+        ...CSP_IMAGE_AND_CSS_SRC,
+        "script-src",
+        "worker-src",
+    ],
+    "fonts.googleapis.com": CSP_IMAGE_CSS_SRC,
+    "fonts.gstatic.com": ["font-src"],
+    "i.imgur.com": ["connect-src", "img-src"],
+    "i.ibb.co": ["connect-src", "img-src"],
+    "i.pinimg.com": ["connect-src", "img-src"],
+    "files.catbox.moe": CSP_IMAGE_AND_CSS_SRC,
+    "cdn.discordapp.com": CSP_IMAGE_AND_CSS_SRC,
+    "media.discordapp.net": ["connect-src", "img-src"],
+    "*.tenor.com": CSP_IMAGE_MEDIA_SRC,
+    "*.tenor.co": CSP_IMAGE_MEDIA_SRC,
+    "*.giphy.com": CSP_IMAGE_MEDIA_SRC,
+    "translate-pa.googleapis.com": ["connect-src"],
+    "icons.duckduckgo.com": ["connect-src", "img-src"],
+};
+
+const findHeader = (headers: PolicyMap, name: string): string | undefined =>
+    Object.keys(headers).find((h) => h.toLowerCase() === name);
+
+const parsePolicy = (policy: string): PolicyMap => {
+    const result: PolicyMap = {};
+    for (const directive of policy.split(";")) {
+        const [key, ...values] = directive.trim().split(/\s+/g);
+        if (key && !Object.prototype.hasOwnProperty.call(result, key)) {
+            result[key] = values;
+        }
+    }
+    return result;
+};
+
+const stringifyPolicy = (policy: PolicyMap): string =>
+    Object.values(policy)
+        .filter((v) => v?.length)
+        .map((d) => d.flat().join(" "))
+        .join("; ");
+
+function patchCspHeaders(headers: PolicyMap): void {
+    const reportOnly = findHeader(headers, "content-security-policy-report-only");
+    if (reportOnly) delete headers[reportOnly];
+
+    const header = findHeader(headers, "content-security-policy");
+    if (!header) return;
+
+    const csp = parsePolicy(headers[header]?.[0] ?? "");
+    const push = (directive: string, ...values: string[]) => {
+        csp[directive] ??= [...(csp["default-src"] ?? [])];
+        csp[directive].push(...values);
+    };
+
+    push("style-src", "'unsafe-inline'");
+    push("script-src", "'unsafe-inline'", "'unsafe-eval'");
+    for (const d of [
+        "style-src",
+        "connect-src",
+        "img-src",
+        "font-src",
+        "media-src",
+        "worker-src",
+    ]) {
+        push(d, "blob:", "data:");
+    }
+    for (const [host, directives] of Object.entries(CSP_POLICIES)) {
+        for (const d of directives) push(d, host);
+    }
+    headers[header] = [stringifyPolicy(csp)];
+}
+
+interface HeadersReceivedDetails {
+    url: string;
+    resourceType?: string;
+    responseHeaders?: PolicyMap;
+}
+
+function installCspPatch(): void {
+    const ses = (
+        electron as unknown as {
+            session?: {
+                defaultSession?: {
+                    webRequest?: {
+                        onHeadersReceived?: (
+                            listener: (
+                                details: HeadersReceivedDetails,
+                                callback: (response: {
+                                    cancel: boolean;
+                                    responseHeaders: PolicyMap | undefined;
+                                }) => void,
+                            ) => void,
+                        ) => void;
+                    };
+                };
+            };
+        }
+    ).session?.defaultSession;
+    const wr = ses?.webRequest;
+    if (!wr?.onHeadersReceived) return;
+    try {
+        wr.onHeadersReceived((details, callback) => {
+            const headers = details.responseHeaders;
+            if (headers) {
+                if (details.resourceType === "mainFrame") {
+                    patchCspHeaders(headers);
+                }
+                // raw.githubusercontent.com etc. serve css as text/plain —
+                // browsers refuse to apply it without a css content type.
+                if (details.resourceType === "stylesheet") {
+                    const ct = findHeader(headers, "content-type");
+                    if (ct) headers[ct] = ["text/css"];
+                }
+            }
+            callback({ cancel: false, responseHeaders: headers });
+        });
+        log("csp patch installed");
+    } catch (e) {
+        log("csp patch failed", e);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // IPC: themes & plugins (filesystem access lives here, not in the renderer)
 // ---------------------------------------------------------------------------
 
@@ -305,6 +458,10 @@ interface ThemeManifest {
     name?: string;
     label?: string;
     authors?: string[];
+    description?: string;
+    version?: string;
+    website?: string;
+    invite?: string;
 }
 
 function safeJoin(root: string, ...parts: string[]): string | null {
@@ -312,23 +469,108 @@ function safeJoin(root: string, ...parts: string[]): string | null {
     return p === root || p.startsWith(root + path.sep) ? p : null;
 }
 
-function listThemes(): { name: string; label?: string; authors?: string[] }[] {
+interface ThemeListEntry {
+    name: string;
+    label?: string | undefined;
+    authors?: string[] | undefined;
+    description?: string | undefined;
+    version?: string | undefined;
+    website?: string | undefined;
+    invite?: string | undefined;
+}
+
+// Ported from Vencord's main/themes getThemeInfo — parses the BetterDiscord
+// style `/** @name ... @author ... */` header block at the top of a theme.
+const THEME_SPLIT_REGEX = /[^\S\r\n]*?\r?(?:\r\n|\n)[^\S\r\n]*?\*[^\S\r\n]?/;
+const THEME_ESCAPED_AT = /^\\@/;
+
+interface ThemeHeaderInfo {
+    name?: string | undefined;
+    label?: string | undefined;
+    authors?: string[] | undefined;
+    description?: string | undefined;
+    version?: string | undefined;
+    website?: string | undefined;
+    invite?: string | undefined;
+}
+
+function parseThemeHeader(css: string, fileName: string): ThemeHeaderInfo {
+    const block = css.split("/**", 2)[1]?.split("*/", 1)[0];
+    if (!block) {
+        return {
+            name: fileName.replace(/\.css$/i, ""),
+            authors: ["Unknown Author"],
+        };
+    }
+
+    const header: Record<string, string> = {};
+    let field = "";
+    let accum = "";
+    for (const line of block.split(THEME_SPLIT_REGEX)) {
+        if (line.length === 0) continue;
+        if (line.charAt(0) === "@" && line.charAt(1) !== " ") {
+            header[field] = accum.trim();
+            const l = line.indexOf(" ");
+            field = line.substring(1, l);
+            accum = line.substring(l + 1);
+        } else {
+            accum += " " + line.replace("\\n", "\n").replace(THEME_ESCAPED_AT, "@");
+        }
+    }
+    header[field] = accum.trim();
+    delete header[""];
+
+    const author = header.author ?? "Unknown Author";
+    return {
+        name: header.name ?? fileName.replace(/\.css$/i, ""),
+        label: header.name,
+        authors: author ? [author] : undefined,
+        description: header.description,
+        version: header.version,
+        website: header.website,
+        invite: header.invite,
+    };
+}
+
+function listThemes(): ThemeListEntry[] {
     const builtin = BUILTIN_THEMES.map((t) => ({
         name: t.name,
         label: t.label,
         authors: t.authors,
     }));
     const builtinNames = new Set(BUILTIN_THEMES.map((t) => t.name));
-    const out: { name: string; label?: string; authors?: string[] }[] = [
-        ...builtin,
-    ];
-    let dirs: fs.Dirent[] = [];
+    const out: ThemeListEntry[] = [...builtin];
+    const seen = new Set(builtinNames);
+    let entries: fs.Dirent[] = [];
     try {
-        dirs = fs.readdirSync(THEMES_DIR, { withFileTypes: true });
+        entries = fs.readdirSync(THEMES_DIR, { withFileTypes: true });
     } catch {
         return out;
     }
-    for (const d of dirs) {
+    for (const d of entries) {
+        // Vencord-style loose .css/.theme.css files.
+        if (d.isFile() && /\.css$/i.test(d.name)) {
+            const fileName = d.name;
+            const themeName = fileName.replace(/\.css$/i, "");
+            if (seen.has(themeName)) continue;
+            seen.add(themeName);
+            try {
+                const css = fs.readFileSync(path.join(THEMES_DIR, fileName), "utf8");
+                const info = parseThemeHeader(css, fileName);
+                out.push({
+                    name: themeName,
+                    ...(info.name ? { label: info.name } : {}),
+                    ...(info.authors ? { authors: info.authors } : {}),
+                    ...(info.description ? { description: info.description } : {}),
+                    ...(info.version ? { version: info.version } : {}),
+                    ...(info.website ? { website: info.website } : {}),
+                    ...(info.invite ? { invite: info.invite } : {}),
+                });
+            } catch {
+                out.push({ name: themeName });
+            }
+            continue;
+        }
         if (!d.isDirectory()) continue;
         const dir = path.join(THEMES_DIR, d.name);
         const manifestPath = path.join(dir, "manifest.json");
@@ -342,12 +584,31 @@ function listThemes(): { name: string; label?: string; authors?: string[] }[] {
         }
         const themeName = manifest.name ?? d.name;
         // Disk themes may shadow a built-in of the same name.
-        if (builtinNames.has(themeName)) continue;
-        out.push({
+        if (seen.has(themeName)) continue;
+        seen.add(themeName);
+        const entry: ThemeListEntry = {
             name: themeName,
             ...(manifest.label ? { label: manifest.label } : {}),
             ...(manifest.authors ? { authors: manifest.authors } : {}),
-        });
+            ...(manifest.description ? { description: manifest.description } : {}),
+            ...(manifest.version ? { version: manifest.version } : {}),
+            ...(manifest.website ? { website: manifest.website } : {}),
+            ...(manifest.invite ? { invite: manifest.invite } : {}),
+        };
+        // Fall back to the css header for metadata the manifest lacks.
+        try {
+            const css = fs.readFileSync(cssPath, "utf8");
+            const info = parseThemeHeader(css, `${themeName}.css`);
+            entry.description ??= info.description;
+            entry.version ??= info.version;
+            entry.website ??= info.website;
+            entry.invite ??= info.invite;
+            if (!entry.authors?.length && info.authors) entry.authors = info.authors;
+            if (!entry.label && info.label) entry.label = info.label;
+        } catch {
+            // unreadable css — skip header metadata
+        }
+        out.push(entry);
     }
     return out;
 }
@@ -355,9 +616,15 @@ function listThemes(): { name: string; label?: string; authors?: string[] }[] {
 function getThemeCss(name: string): string | null {
     // Theme name must be a single path segment — no traversal.
     if (!/^[\w.-]+$/.test(name)) return null;
-    const cssPath = safeJoin(THEMES_DIR, name, "theme.css");
-    if (cssPath && fs.existsSync(cssPath)) {
-        return fs.readFileSync(cssPath, "utf8");
+    const dirPath = safeJoin(THEMES_DIR, name, "theme.css");
+    if (dirPath && fs.existsSync(dirPath)) {
+        return fs.readFileSync(dirPath, "utf8");
+    }
+    for (const fileName of [`${name}.css`, `${name}.theme.css`]) {
+        const filePath = safeJoin(THEMES_DIR, fileName);
+        if (filePath && fs.existsSync(filePath)) {
+            return fs.readFileSync(filePath, "utf8");
+        }
     }
     return BUILTIN_THEMES.find((t) => t.name === name)?.css ?? null;
 }
@@ -715,6 +982,7 @@ function registerIpc(): void {
 // ---------------------------------------------------------------------------
 
 installModuleLoadPatch();
+installCspPatch();
 registerIpc();
 log(`bootstrap loaded (data: ${DATA_DIR})`);
 

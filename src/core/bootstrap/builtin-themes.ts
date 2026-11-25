@@ -8,6 +8,7 @@
  */
 
 import { CHILLAX_CSS } from "./chillax-theme";
+import { GLASS_CSS } from "./glass-theme";
 import { SYSTEM24_CSS } from "./system24-theme";
 
 export interface BuiltinTheme {
@@ -325,5 +326,11 @@ export const BUILTIN_THEMES: BuiltinTheme[] = [
         label: "Chillax",
         authors: ["Chillax Squad", "Wq", "LofiTurtle", "Inmoresentum", "Demented_Elmo"],
         css: CHILLAX_CSS,
+    },
+    {
+        name: "glass",
+        label: "Glass",
+        authors: ["Monocord"],
+        css: GLASS_CSS,
     },
 ];

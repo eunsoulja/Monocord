@@ -99,6 +99,17 @@ async function main(): Promise<void> {
                 bridge.invoke("themes-list") as Promise<Theme[]>,
             getThemeCss: (name) =>
                 bridge.invoke("theme-get", name) as Promise<string | null>,
+            wallpaperGet: () =>
+                bridge.invoke("wallpaper-get") as Promise<{
+                    name: string;
+                    dataUrl: string;
+                } | null>,
+            wallpaperSet: (payload) =>
+                bridge.invoke("wallpaper-set", payload) as Promise<{
+                    name: string;
+                } | null>,
+            wallpaperClear: () =>
+                bridge.invoke("wallpaper-clear") as Promise<boolean>,
         });
     } else {
         log.warn("no monocord bridge — running without IPC persistence");

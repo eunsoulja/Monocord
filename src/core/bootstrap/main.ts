@@ -31,6 +31,7 @@ const DIST_DIR = __dirname;
 const DATA_DIR = path.resolve(DIST_DIR, "..");
 const SETTINGS_FILE = path.join(DATA_DIR, "renderer-settings.json");
 const THEMES_DIR = path.join(DATA_DIR, "themes");
+const ASSETS_DIR = path.join(DATA_DIR, "assets");
 const PLUGINS_DIR = path.join(DATA_DIR, "plugins");
 const LOG_FILE = path.join(DATA_DIR, "logs", "renderer.log");
 const LOG_DIR = path.dirname(LOG_FILE);
@@ -689,6 +690,104 @@ function getPluginCode(name: string): { code: string; manifest: PluginManifestIn
 }
 
 // ---------------------------------------------------------------------------
+// Wallpaper — user-uploaded background image for transparent themes.
+//
+// The renderer sends a data URL; we keep the decoded file under
+// assets/wallpaper.<ext> and remember the filename in settings as
+// `theme.wallpaper`. wallpaper-get returns a fresh data URL so the
+// renderer can inject it as the --monocord-wallpaper CSS var (data: is
+// already allowed by the CSP patch's img-src).
+// ---------------------------------------------------------------------------
+
+const WALLPAPER_SETTING = ["theme", "wallpaper"];
+const WALLPAPER_MAX_BYTES = 15 * 1024 * 1024;
+const WALLPAPER_MIME_EXT: Record<string, string> = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/gif": "gif",
+    "image/webp": "webp",
+    "image/avif": "avif",
+};
+const WALLPAPER_EXT_MIME: Record<string, string> = Object.fromEntries(
+    Object.entries(WALLPAPER_MIME_EXT).map(([mime, ext]) => [ext, mime]),
+);
+
+function wallpaperFileName(): string | null {
+    const v = getPath(readSettings(), WALLPAPER_SETTING);
+    return typeof v === "string" && /^[\w.-]+$/.test(v) ? v : null;
+}
+
+function wallpaperSetSetting(name: string | null): void {
+    const data = readSettings();
+    setPath(data, WALLPAPER_SETTING, name);
+    writeSettings(data);
+}
+
+function wallpaperSet(payload: unknown): { name: string } | null {
+    if (!payload || typeof payload !== "object") return null;
+    const dataUrl = (payload as Record<string, unknown>).dataUrl;
+    if (typeof dataUrl !== "string") return null;
+    const m = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/is.exec(dataUrl);
+    if (!m) return null;
+    const mime = m[1]!.toLowerCase();
+    const ext = WALLPAPER_MIME_EXT[mime];
+    if (!ext) return null;
+    let buf: Buffer;
+    try {
+        buf = Buffer.from(m[2]!, "base64");
+    } catch {
+        return null;
+    }
+    if (buf.length === 0 || buf.length > WALLPAPER_MAX_BYTES) return null;
+
+    fs.mkdirSync(ASSETS_DIR, { recursive: true });
+    // Drop previous uploads, then write the new one.
+    try {
+        for (const f of fs.readdirSync(ASSETS_DIR)) {
+            if (/^wallpaper-.*\.[a-z0-9]+$/i.test(f)) {
+                fs.rmSync(path.join(ASSETS_DIR, f), { force: true });
+            }
+        }
+    } catch {
+        // best effort
+    }
+    const name = `wallpaper-${Date.now()}.${ext}`;
+    fs.writeFileSync(path.join(ASSETS_DIR, name), buf);
+    wallpaperSetSetting(name);
+    log(`wallpaper set: ${name} (${buf.length} bytes)`);
+    return { name };
+}
+
+function wallpaperGet(): { name: string; dataUrl: string } | null {
+    const name = wallpaperFileName();
+    if (!name) return null;
+    const filePath = safeJoin(ASSETS_DIR, name);
+    if (!filePath || !fs.existsSync(filePath)) return null;
+    const ext = name.split(".").pop()?.toLowerCase() ?? "";
+    const mime = WALLPAPER_EXT_MIME[ext] ?? "image/png";
+    try {
+        const b64 = fs.readFileSync(filePath).toString("base64");
+        return { name, dataUrl: `data:${mime};base64,${b64}` };
+    } catch {
+        return null;
+    }
+}
+
+function wallpaperClear(): void {
+    wallpaperSetSetting(null);
+    try {
+        for (const f of fs.readdirSync(ASSETS_DIR)) {
+            if (/^wallpaper-.*\.[a-z0-9]+$/i.test(f)) {
+                fs.rmSync(path.join(ASSETS_DIR, f), { force: true });
+            }
+        }
+    } catch {
+        // best effort
+    }
+    log("wallpaper cleared");
+}
+
+// ---------------------------------------------------------------------------
 // Discord Rich Presence (local IPC pipe)
 // ---------------------------------------------------------------------------
 //
@@ -970,6 +1069,15 @@ function registerIpc(): void {
 
     ipcMain.handle("monocord:themes-list", () => listThemes());
     ipcMain.handle("monocord:theme-get", (_e, name: string) => getThemeCss(name));
+
+    ipcMain.handle("monocord:wallpaper-set", (_e, payload: unknown) =>
+        wallpaperSet(payload),
+    );
+    ipcMain.handle("monocord:wallpaper-get", () => wallpaperGet());
+    ipcMain.handle("monocord:wallpaper-clear", () => {
+        wallpaperClear();
+        return true;
+    });
     ipcMain.handle("monocord:plugins-list", () => listPlugins());
     ipcMain.handle("monocord:plugin-get", (_e, name: string) => getPluginCode(name));
 

@@ -907,6 +907,8 @@ interface ThemesState {
     quickCss: boolean;
     customCss: string;
     saved: boolean;
+    wallpaper: string | null;
+    wallpaperBusy: boolean;
 }
 
 export class ThemesPanel extends PanelBase {
@@ -916,8 +918,11 @@ export class ThemesPanel extends PanelBase {
         quickCss: Themes.quickCss,
         customCss: "",
         saved: false,
+        wallpaper: Themes.wallpaperUrl,
+        wallpaperBusy: false,
     };
     private offs: (() => void)[] = [];
+    private wallpaperInput: HTMLInputElement | null = null;
 
     componentDidMount(): void {
         ensurePluginsCss();
@@ -925,17 +930,63 @@ export class ThemesPanel extends PanelBase {
         void Settings.get<string>("theme.customCss", "").then((v) =>
             this.setState({ customCss: v ?? "" }),
         );
+        void Themes.refreshWallpaper().then(() =>
+            this.setState({ wallpaper: Themes.wallpaperUrl }),
+        );
         this.offs = [
             Events.on("theme.changed", () =>
-                this.setState({ enabled: [...Themes.enabled] }),
+                this.setState({
+                    enabled: [...Themes.enabled],
+                    wallpaper: Themes.wallpaperUrl,
+                }),
             ),
             Events.on("settings.changed", () => this.setState({ saved: false })),
         ];
     }
 
+    private pickWallpaper(): void {
+        if (this.wallpaperInput) {
+            this.wallpaperInput.value = "";
+            this.wallpaperInput.click();
+            return;
+        }
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = "image/png,image/jpeg,image/gif,image/webp,image/avif";
+        input.style.display = "none";
+        input.onchange = () => {
+            const file = input.files?.[0];
+            if (!file) return;
+            this.setState({ wallpaperBusy: true });
+            const reader = new FileReader();
+            reader.onload = () => {
+                const dataUrl = String(reader.result ?? "");
+                void Themes.setWallpaper(dataUrl)
+                    .then((name) => {
+                        this.setState({
+                            wallpaper: Themes.wallpaperUrl,
+                            wallpaperBusy: false,
+                        });
+                        if (!name) log.warn("wallpaper upload rejected");
+                    })
+                    .catch((e) => {
+                        log.error("wallpaper upload failed", e);
+                        this.setState({ wallpaperBusy: false });
+                    });
+            };
+            reader.onerror = () => this.setState({ wallpaperBusy: false });
+            reader.readAsDataURL(file);
+        };
+        document.body.appendChild(input);
+        this.wallpaperInput = input;
+        input.click();
+    }
+
     componentWillUnmount(): void {
         this.offs.forEach((off) => off());
         this.offs = [];
+        this.wallpaperInput?.remove();
+        this.wallpaperInput = null;
     }
 
     private renderThemeToggle(name: string, isEnabled: boolean): unknown {
@@ -956,7 +1007,8 @@ export class ThemesPanel extends PanelBase {
     }
 
     override render(): unknown {
-        const { themes, enabled, quickCss, customCss, saved } = this.state;
+        const { themes, enabled, quickCss, customCss, saved, wallpaper, wallpaperBusy } =
+            this.state;
         const setCustomCss = (v: string) => this.setState({ customCss: v });
 
     return h(
@@ -1022,6 +1074,66 @@ export class ThemesPanel extends PanelBase {
                             ),
                         );
                     }),
+        ),
+        h(
+            "div",
+            { className: "mc-card", style: { marginTop: 16 } },
+            h(
+                "div",
+                { className: "mc-head", style: { marginBottom: 8 } },
+                h("div", { className: "mc-name", style: { fontSize: 14 } }, "Wallpaper"),
+                h(
+                    "div",
+                    { className: "mc-head-l" },
+                    wallpaper
+                        ? h(
+                              "button",
+                              {
+                                  style: S.btn,
+                                  onClick: () =>
+                                      void Themes.clearWallpaper().then(() =>
+                                          this.setState({ wallpaper: null }),
+                                      ),
+                              },
+                              "Remove",
+                          )
+                        : null,
+                    h(
+                        "button",
+                        {
+                            style: S.btn,
+                            disabled: wallpaperBusy,
+                            onClick: () => this.pickWallpaper(),
+                        },
+                        wallpaperBusy ? "Uploading…" : wallpaper ? "Replace" : "Upload image",
+                    ),
+                ),
+            ),
+            h(
+                "div",
+                {
+                    style: {
+                        height: 90,
+                        borderRadius: 8,
+                        background: wallpaper
+                            ? `url("${wallpaper}") center/cover no-repeat, var(--background-secondary, #1e1f22)`
+                            : "var(--background-secondary, #1e1f22)",
+                        border: "1px solid var(--background-modifier-accent, rgba(255,255,255,.08))",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        color: "var(--text-muted, #949ba4)",
+                        fontSize: 12,
+                        marginBottom: 6,
+                    },
+                },
+                wallpaper ? null : "No wallpaper — used by transparent themes like Glass",
+            ),
+            h(
+                "div",
+                { className: "mc-desc", style: { minHeight: 0 } },
+                "Shown behind transparent themes (e.g. Glass) as --monocord-wallpaper. PNG, JPG, GIF, WebP or AVIF up to 15 MB.",
+            ),
         ),
         h(
             "div",

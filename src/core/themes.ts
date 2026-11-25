@@ -20,6 +20,7 @@ const log = Logger.get("themes");
 
 const STYLE_ID = "monocord-theme";
 const CUSTOM_STYLE_ID = "monocord-custom-css";
+const WALLPAPER_STYLE_ID = "monocord-wallpaper";
 const SETTINGS_ENABLED = "theme.enabled";
 const SETTINGS_ACTIVE = "theme.active"; // legacy single-theme key
 const SETTINGS_CUSTOM_CSS = "theme.customCss";
@@ -31,6 +32,11 @@ const DEFAULT_THEME = "system24";
 export interface ThemeBridge {
     listThemes(): Promise<Theme[]>;
     getThemeCss(name: string): Promise<string | null>;
+    wallpaperGet?(): Promise<{ name: string; dataUrl: string } | null>;
+    wallpaperSet?(payload: {
+        dataUrl: string;
+    }): Promise<{ name: string } | null>;
+    wallpaperClear?(): Promise<boolean>;
 }
 
 let bridge: ThemeBridge | null = null;
@@ -112,6 +118,8 @@ export const Themes = {
     quickCss: true,
     /** Custom CSS payload (cached for re-application). */
     customCss: "",
+    /** Uploaded wallpaper data URL (null = none). */
+    wallpaper: null as string | null,
     /** Legacy compat: first enabled theme, if any. */
     get active(): string | null {
         return this.enabled[0] ?? null;
@@ -175,6 +183,57 @@ export const Themes = {
         await Settings.set(SETTINGS_CUSTOM_CSS, css);
     },
 
+    /**
+     * Apply the uploaded wallpaper as the `--monocord-wallpaper` CSS var.
+     * Transparent themes (e.g. Glass) reference it; without one the var
+     * falls back to `none` inside the theme itself.
+     */
+    applyWallpaper(): void {
+        const w = this.wallpaper;
+        setCss(
+            WALLPAPER_STYLE_ID,
+            w
+                ? `:root{--monocord-wallpaper:url("${w}")}`
+                : ":root{--monocord-wallpaper:none}",
+        );
+    },
+
+    /** Current wallpaper data URL, if any. */
+    get wallpaperUrl(): string | null {
+        return this.wallpaper;
+    },
+
+    /** Upload a new wallpaper (data URL). Returns the stored file name. */
+    async setWallpaper(dataUrl: string): Promise<string | null> {
+        if (!bridge?.wallpaperSet) return null;
+        const res = await bridge.wallpaperSet({ dataUrl });
+        if (!res) return null;
+        this.wallpaper = dataUrl;
+        this.applyWallpaper();
+        Events.emit("theme.changed", { enabled: this.enabled });
+        return res.name;
+    },
+
+    /** Remove the uploaded wallpaper. */
+    async clearWallpaper(): Promise<void> {
+        if (bridge?.wallpaperClear) await bridge.wallpaperClear();
+        this.wallpaper = null;
+        this.applyWallpaper();
+        Events.emit("theme.changed", { enabled: this.enabled });
+    },
+
+    /** Load the persisted wallpaper (called from restore). */
+    async refreshWallpaper(): Promise<void> {
+        if (!bridge?.wallpaperGet) return;
+        try {
+            const w = await bridge.wallpaperGet();
+            this.wallpaper = w?.dataUrl ?? null;
+        } catch {
+            this.wallpaper = null;
+        }
+        this.applyWallpaper();
+    },
+
     /** Fetch + concatenate all enabled theme CSS and apply it. */
     async reapply(): Promise<void> {
         if (!bridge) return;
@@ -212,6 +271,7 @@ export const Themes = {
         this.quickCss =
             (await Settings.get<boolean>(SETTINGS_QUICK_CSS, true)) ?? true;
         setCss(CUSTOM_STYLE_ID, this.quickCss ? this.customCss : "");
+        await this.refreshWallpaper();
 
         let enabled =
             (await Settings.get<string[]>(SETTINGS_ENABLED, [])) ?? [];

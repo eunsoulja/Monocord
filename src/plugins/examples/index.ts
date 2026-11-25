@@ -124,29 +124,27 @@ const CompactMessages: Plugin = {
     settings: {},
 
     async start() {
-        const prev = await Api.Settings.get<string>(
-            "plugins.settings.CompactMessages.css",
-            "",
-        );
-        const combined = prev ? `${prev}\n${CompactMessagesCSS}` : CompactMessagesCSS;
+        const cur =
+            (await Api.Settings.get<string>("theme.customCss", "")) ?? "";
+        const cleaned = cur.split(CompactMessagesCSS).join("").trim();
+        const combined = cleaned
+            ? `${cleaned}\n${CompactMessagesCSS}`
+            : CompactMessagesCSS;
         await Api.Themes.setCustomCss(combined);
         await Api.Settings.set(
             "plugins.settings.CompactMessages.css",
-            combined,
+            CompactMessagesCSS,
         );
     },
 
     async stop() {
         const cur =
-            (await Api.Settings.get<string>(
-                "plugins.settings.CompactMessages.css",
-                "",
-            )) ?? "";
-        const stripped = cur.replace(CompactMessagesCSS, "").trim();
+            (await Api.Settings.get<string>("theme.customCss", "")) ?? "";
+        const stripped = cur.split(CompactMessagesCSS).join("").trim();
         await Api.Themes.setCustomCss(stripped);
         await Api.Settings.set(
             "plugins.settings.CompactMessages.css",
-            stripped,
+            "",
         );
     },
 };

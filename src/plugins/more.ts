@@ -392,6 +392,129 @@ const FlatAvatars = cssPlugin(
     `,
 );
 
+const NoAvatars = cssPlugin(
+    "NoAvatars",
+    "Hide avatars in messages, DMs and the member list.",
+    `
+    /* NoAvatars */
+    [id^="chat-messages"] [class*="avatar"],
+    [class*="member"] [class*="avatar"],
+    [class*="privateChannels"] [class*="avatar"],
+    [class*="chat"] [class*="avatar"] {
+        display: none !important;
+    }
+    `,
+);
+
+const CompactAvatars = cssPlugin(
+    "CompactAvatars",
+    "Smaller avatars in messages and the member list.",
+    `
+    /* CompactAvatars */
+    [id^="chat-messages"] [class*="avatar"],
+    [class*="member"] [class*="avatar"],
+    [class*="privateChannels"] [class*="avatar"] {
+        transform: scale(0.8);
+    }
+    `,
+);
+
+const NoMemberAvatars = cssPlugin(
+    "NoMemberAvatars",
+    "Hide avatars in the member list only.",
+    `
+    /* NoMemberAvatars */
+    [class*="member"] [class*="avatar"],
+    [class*="members"] [class*="avatar"] {
+        display: none !important;
+    }
+    `,
+);
+
+const NoEmbedColor = cssPlugin(
+    "NoEmbedColor",
+    "Hide the colored accent bar on link embeds.",
+    `
+    /* NoEmbedColor */
+    [class*="embed"] [class*="accent"],
+    [class*="embed"] > [class*="accent"] {
+        display: none !important;
+    }
+    `,
+);
+
+const CompactReactions = cssPlugin(
+    "CompactReactions",
+    "Smaller reaction pills under messages.",
+    `
+    /* CompactReactions */
+    [class*="reaction"] {
+        transform: scale(0.85);
+    }
+    `,
+);
+
+const NoUnreadHighlight = cssPlugin(
+    "NoUnreadHighlight",
+    "Remove the highlight on channels with unread messages.",
+    `
+    /* NoUnreadHighlight */
+    [class*="channel"][class*="unread"],
+    [class*="guilds"] [class*="unread"] {
+        background: transparent !important;
+    }
+    `,
+);
+
+const NoRoleColors = cssPlugin(
+    "NoRoleColors",
+    "Normalize member name colors in the member list and chat.",
+    `
+    /* NoRoleColors */
+    [class*="member"] [class*="name"],
+    [id^="chat-messages"] [class*="username"] {
+        color: var(--text-normal, #dbdee1) !important;
+    }
+    `,
+);
+
+const NoServerTag = cssPlugin(
+    "NoServerTag",
+    "Hide server/clan tags in the UI.",
+    `
+    /* NoServerTag */
+    [class*="clanTag"],
+    [class*="serverTag"],
+    [class*="guildTag"] {
+        display: none !important;
+    }
+    `,
+);
+
+const NoEmbedFooter = cssPlugin(
+    "NoEmbedFooter",
+    "Hide embed footers (timestamps, site names).",
+    `
+    /* NoEmbedFooter */
+    [class*="embed"] [class*="footer"],
+    [class*="embed"] [class*="embedFooter"] {
+        display: none !important;
+    }
+    `,
+);
+
+const HugeAvatars = cssPlugin(
+    "HugeAvatars",
+    "Much larger avatars in messages and the member list.",
+    `
+    /* HugeAvatars */
+    [id^="chat-messages"] [class*="avatar"],
+    [class*="member"] [class*="avatar"] {
+        transform: scale(1.4);
+    }
+    `,
+);
+
 // ---------------------------------------------------------------------------
 // Functional plugins
 // ---------------------------------------------------------------------------
@@ -674,6 +797,194 @@ function gifStealthPlugin(): Plugin {
     };
 }
 
+/**
+ * CopyCurrentIds — Ctrl+Alt+1 copies the current channel ID,
+ * Ctrl+Alt+2 copies the current guild ID (or @me for DMs).
+ */
+function copyCurrentIdsPlugin(): Plugin {
+    let off: (() => void) | null = null;
+    return {
+        name: "CopyCurrentIds",
+        description: "Ctrl+Alt+1 copies channel ID, Ctrl+Alt+2 copies server ID.",
+        authors: ["Monocord"],
+        version: "0.1.0",
+        defer: true,
+
+        start() {
+            const handler = (ev: KeyboardEvent) => {
+                if (!(ev.ctrlKey && ev.altKey && !ev.shiftKey)) return;
+                const k = ev.key;
+                if (k !== "1" && k !== "2") return;
+                try {
+                    const sel = findStoreByName("SelectedChannelStore");
+                    const getChannelId = sel?.getChannelId as
+                        | (() => string | null)
+                        | undefined;
+                    const getGuildId = sel?.getGuildId as
+                        | (() => string | null)
+                        | undefined;
+                    let text: string | null = null;
+                    let label = "";
+                    if (k === "1") {
+                        text = getChannelId?.() ?? null;
+                        label = "channel ID";
+                    } else {
+                        const gid = getGuildId?.();
+                        text = gid || "@me";
+                        label = "server ID";
+                    }
+                    if (!text) {
+                        toast("No channel/server selected");
+                        return;
+                    }
+                    ev.preventDefault();
+                    void navigator.clipboard?.writeText(text).then(
+                        () => toast(`Copied ${label}: ${text}`),
+                        () => toast(`Copy failed — ${text}`),
+                    );
+                } catch {
+                    toast("Stores not ready yet");
+                }
+            };
+            document.addEventListener("keydown", handler);
+            off = () => document.removeEventListener("keydown", handler);
+        },
+
+        stop() {
+            off?.();
+            off = null;
+        },
+    };
+}
+
+/**
+ * CopyMsgLink — Ctrl+Alt+L copies a jump link for the message under the
+ * cursor (parsed from its `chat-messages-<channel>-<msg>` element id).
+ */
+function copyMsgLinkPlugin(): Plugin {
+    let off: (() => void) | null = null;
+    return {
+        name: "CopyMsgLink",
+        description: "Ctrl+Alt+L copies a jump link for the hovered message.",
+        authors: ["Monocord"],
+        version: "0.1.0",
+        defer: true,
+
+        start() {
+            let hovered: Element | null = null;
+            const track = (ev: MouseEvent) => {
+                const t = ev.target;
+                hovered =
+                    t instanceof Element
+                        ? t.closest('[id^="chat-messages"]')
+                        : null;
+            };
+            document.addEventListener("mousemove", track, { passive: true });
+
+            const handler = (ev: KeyboardEvent) => {
+                if (
+                    !(ev.ctrlKey && ev.altKey && !ev.shiftKey && ev.key.toLowerCase() === "l")
+                ) {
+                    return;
+                }
+                const msgEl = hovered;
+                if (!msgEl?.id.startsWith("chat-messages-")) {
+                    toast("Hover a message first");
+                    return;
+                }
+                const rest = msgEl.id.slice("chat-messages-".length);
+                const dash = rest.lastIndexOf("-");
+                if (dash < 0) return;
+                const channelId = rest.slice(0, dash);
+                const messageId = rest.slice(dash + 1);
+                let guildId = "@me";
+                try {
+                    const sel = findStoreByName("SelectedChannelStore");
+                    const gid = (sel?.getGuildId as (() => string | null) | undefined)?.();
+                    if (gid) guildId = gid;
+                } catch {
+                    /* stay @me */
+                }
+                const url = `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
+                ev.preventDefault();
+                void navigator.clipboard?.writeText(url).then(
+                    () => toast("Message link copied"),
+                    () => toast(`Copy failed — ${url}`),
+                );
+            };
+            document.addEventListener("keydown", handler);
+            off = () => {
+                document.removeEventListener("mousemove", track);
+                document.removeEventListener("keydown", handler);
+            };
+        },
+
+        stop() {
+            off?.();
+            off = null;
+        },
+    };
+}
+
+/**
+ * ServerListAlphabetical — sorts server icons A→Z in the guild sidebar.
+ * Bails out entirely when server folders are present (folders have their
+ * own ordering and mixing them would look broken).
+ */
+function serverListAlphabeticalPlugin(): Plugin {
+    let stopObserve: (() => void) | null = null;
+    let sorting = false;
+    return {
+        name: "ServerListAlphabetical",
+        description: "Sort server icons alphabetically (disabled while folders exist).",
+        authors: ["Monocord"],
+        version: "0.1.0",
+        defer: true,
+
+        start() {
+            const sort = (scroller: Element) => {
+                if (sorting) return;
+                if (scroller.querySelector('[class*="folder"]')) return;
+                const items = Array.from(scroller.children).filter(
+                    (c) =>
+                        c instanceof HTMLElement &&
+                        (c.getAttribute("data-list-item-id")?.startsWith("guildsnav") ||
+                            c.querySelector('[class*="avatar"], [role="listitem"]')),
+                );
+                if (items.length < 2) return;
+                const keyed = items.map((el) => ({
+                    el,
+                    key: (
+                        el.getAttribute("aria-label") ??
+                        el.textContent ??
+                        ""
+                    ).toLowerCase(),
+                }));
+                keyed.sort((a, b) => a.key.localeCompare(b.key));
+                if (keyed.every((k, i) => k.el === items[i])) return;
+                sorting = true;
+                try {
+                    for (const { el } of keyed) scroller.append(el);
+                } finally {
+                    sorting = false;
+                }
+            };
+            stopObserve = observeAdded('[class*="guilds"]', (node) => {
+                const scroller =
+                    node instanceof HTMLElement && node.scrollHeight > node.clientHeight
+                        ? node
+                        : node.querySelector('[class*="scroller"], [class*="list"]') ?? node;
+                sort(scroller);
+            });
+        },
+
+        stop() {
+            stopObserve?.();
+            stopObserve = null;
+        },
+    };
+}
+
 /** Register all "more" plugins. */
 export function registerMore(): void {
     for (const plugin of [
@@ -707,10 +1018,23 @@ export function registerMore(): void {
         GuildIconBorder,
         NoUnreadBadge,
         FlatAvatars,
+        NoAvatars,
+        CompactAvatars,
+        NoMemberAvatars,
+        NoEmbedColor,
+        CompactReactions,
+        NoUnreadHighlight,
+        NoRoleColors,
+        NoServerTag,
+        NoEmbedFooter,
+        HugeAvatars,
         copyIdsPlugin(),
         friendsOnlinePlugin(),
         serverBoostsPlugin(),
         gifStealthPlugin(),
+        copyCurrentIdsPlugin(),
+        copyMsgLinkPlugin(),
+        serverListAlphabeticalPlugin(),
     ]) {
         try {
             Api.Plugins.register(plugin);

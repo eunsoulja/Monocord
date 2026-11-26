@@ -766,6 +766,44 @@ export class PluginsPanel extends PanelBase {
         this.forceUpdate();
     }
 
+    private exportPluginList(): void {
+        const enabled = Api.Plugins.names().filter(
+            (n) => n !== "MonocordSettings" && Api.Plugins.isEnabled(n),
+        );
+        const blob = new Blob([JSON.stringify({ enabled }, null, 2)], {
+            type: "application/json",
+        });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "monocord-plugins.json";
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    private async importPluginList(file: File): Promise<void> {
+        try {
+            const doc = JSON.parse(await file.text()) as { enabled?: unknown };
+            if (!Array.isArray(doc.enabled)) throw new Error("missing enabled array");
+            const wanted = new Set(doc.enabled.filter((x): x is string => typeof x === "string"));
+            for (const name of Api.Plugins.names()) {
+                if (name === "MonocordSettings") continue;
+                const should = wanted.has(name);
+                const op = should
+                    ? Api.Plugins.isEnabled(name)
+                        ? Promise.resolve()
+                        : Api.Plugins.enable(name)
+                    : Api.Plugins.isEnabled(name)
+                      ? Api.Plugins.disable(name)
+                      : Promise.resolve();
+                await op.catch((e) => log.error(`import ${name} failed`, e));
+            }
+        } catch (e) {
+            log.error("plugin list import failed", e);
+        }
+        this.forceUpdate();
+    }
+
     private renderToggle(name: string, enabled: boolean): unknown {
         return h(
             "button",
@@ -1082,6 +1120,33 @@ export class PluginsPanel extends PanelBase {
                         onClick: () => void this.toggleAll(false),
                     },
                     "Disable all",
+                ),
+                h(
+                    "button",
+                    {
+                        className: "mc-chip",
+                        title: "Download the list of enabled plugins as JSON",
+                        onClick: () => this.exportPluginList(),
+                    },
+                    "Export",
+                ),
+                h(
+                    "button",
+                    {
+                        className: "mc-chip",
+                        title: "Apply an exported plugin list (enables/disables to match)",
+                        onClick: () => {
+                            const input = document.createElement("input");
+                            input.type = "file";
+                            input.accept = "application/json,.json";
+                            input.onchange = () => {
+                                const f = input.files?.[0];
+                                if (f) void this.importPluginList(f);
+                            };
+                            input.click();
+                        },
+                    },
+                    "Import",
                 ),
             ),
             rows.length === 0

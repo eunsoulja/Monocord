@@ -11,6 +11,7 @@
 import { Api } from "../core/api";
 import { Logger } from "../core/logger";
 import type { Plugin, PluginSettingsViewContext } from "../core/types";
+import { h, useState } from "../ui/react";
 import { findDispatcher, findStoreByName, type Dispatcher } from "./mods";
 
 const log = Logger.get("custom-rpc");
@@ -562,6 +563,113 @@ function val0(ctx: PluginSettingsViewContext, key: string): unknown {
     return ctx.values[key] ?? CustomRPC.settings?.[key];
 }
 
+const RPC_PRESET_FIELDS = [
+    "appId", "appName", "details", "detailsUrl", "state", "stateUrl",
+    "type", "streamUrl", "timestampMode", "startTime", "endTime",
+    "imageBig", "imageBigUrl", "imageBigTooltip",
+    "imageSmall", "imageSmallUrl", "imageSmallTooltip",
+    "buttonOneText", "buttonOneUrl", "buttonTwoText", "buttonTwoUrl",
+    "partySize", "partyMaxSize",
+] as const;
+
+/** Named snapshots of the activity fields, stored under `presets`. */
+function RpcPresetsBar(props: {
+    ctx: PluginSettingsViewContext;
+    set: (key: string, value: unknown) => void;
+    disabled: boolean;
+}): unknown {
+    const { ctx, set, disabled } = props;
+    const [name, setName] = useState("");
+    const [sel, setSel] = useState("");
+    const presets = (ctx.values["presets"] ?? {}) as Record<
+        string,
+        Record<string, unknown>
+    >;
+    const names = Object.keys(presets);
+    const chip: Record<string, unknown> = {
+        background: "var(--background-secondary, #2b2d31)",
+        border: "1px solid var(--background-modifier-accent, #3f4147)",
+        color: "var(--text-normal, #dbdee1)",
+        borderRadius: 16,
+        padding: "4px 12px",
+        fontSize: 12,
+        cursor: "pointer",
+        opacity: disabled ? 0.5 : 1,
+    };
+    const inputStyle: Record<string, unknown> = {
+        background: "var(--input-background, #1e1f22)",
+        color: "var(--text-normal, #dbdee1)",
+        border: "1px solid var(--background-modifier-accent, #3f4147)",
+        borderRadius: 4,
+        padding: "5px 9px",
+        fontSize: 12,
+        opacity: disabled ? 0.5 : 1,
+    };
+    return h(
+        "div",
+        { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", margin: "0 0 4px" } },
+        h(
+            "select",
+            {
+                style: { ...inputStyle, maxWidth: 160 },
+                disabled,
+                value: sel,
+                onChange: (e: { target: { value: string } }) => {
+                    setSel(e.target.value);
+                    const p = presets[e.target.value];
+                    if (!p) return;
+                    for (const k of RPC_PRESET_FIELDS) {
+                        if (k in p) set(k, p[k]);
+                    }
+                },
+            },
+            h("option", { value: "" }, "Load preset…"),
+            names.map((n) => h("option", { key: n, value: n }, n)),
+        ),
+        h("input", {
+            style: { ...inputStyle, width: 110 },
+            placeholder: "Preset name",
+            value: name,
+            disabled,
+            onChange: (e: { target: { value: string } }) => setName(e.target.value),
+        }),
+        h(
+            "button",
+            {
+                style: chip,
+                disabled: disabled || !name.trim(),
+                title: "Save the current activity fields as a preset",
+                onClick: () => {
+                    const snap = Object.fromEntries(
+                        RPC_PRESET_FIELDS.map((k) => [k, val0(ctx, k)]),
+                    );
+                    set("presets", { ...presets, [name.trim()]: snap });
+                    setName("");
+                },
+            },
+            "Save",
+        ),
+        names.length > 0
+            ? h(
+                  "button",
+                  {
+                      style: chip,
+                      disabled,
+                      title: "Delete the selected preset",
+                      onClick: () => {
+                          if (!sel || !(sel in presets)) return;
+                          const next = { ...presets };
+                          delete next[sel];
+                          set("presets", next);
+                          setSel("");
+                      },
+                  },
+                  "Delete…",
+              )
+            : null,
+    );
+}
+
 let dispatcher: Dispatcher | null = null;
 let dispatcherPoll: ReturnType<typeof setInterval> | null = null;
 
@@ -703,6 +811,7 @@ export const CustomRPC: Plugin = {
         buttonTwoUrl: "",
         partySize: 0,
         partyMaxSize: 0,
+        presets: {},
     },
 
     // Vencord-style dedicated settings UI (paired fields, validation,
@@ -899,6 +1008,10 @@ export const CustomRPC: Plugin = {
         return h(
             "div",
             null,
+            label("Presets"),
+            h(RpcPresetsBar, { ctx, set, disabled }),
+            hint("Save the current fields as a named preset and reload them later."),
+
             // -- live preview -------------------------------------------
             label("Preview"),
             h(

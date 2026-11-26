@@ -8,7 +8,7 @@ import { Api } from "../core/api";
 import { Logger } from "../core/logger";
 import type { Plugin } from "../core/types";
 import { cssPlugin } from "./extras";
-import { el, observeAdded, toast } from "./dom-utils";
+import { el, observeAdded, onDomReady, toast } from "./dom-utils";
 import { findStoreByName } from "./mods";
 
 const log = Logger.get("more");
@@ -1143,6 +1143,92 @@ function noGifAutoplayPlugin(): Plugin {
     };
 }
 
+/**
+ * ChatInputDrafts — shows a dot on channel-list items that have an
+ * unsent draft in the message input.
+ */
+function chatInputDraftsPlugin(): Plugin {
+    const drafts = new Set<string>();
+    let stopObs: (() => void) | null = null;
+    let offInput: (() => void) | null = null;
+
+    const refresh = () => {
+        document
+            .querySelectorAll<HTMLElement>('[data-list-item-id^="channels___"]')
+            .forEach((item) => {
+                const id = item.dataset.listItemId!.slice("channels___".length);
+                const has = drafts.has(id);
+                let dot = item.querySelector<HTMLElement>(".mc-draft-dot");
+                if (has && !dot) {
+                    dot = document.createElement("span");
+                    dot.className = "mc-draft-dot";
+                    item.append(dot);
+                } else if (!has && dot) {
+                    dot.remove();
+                }
+            });
+    };
+
+    const onInput = (ev: Event) => {
+        const t = ev.target;
+        if (!(t instanceof HTMLElement)) return;
+        if (!t.closest('[class*="slateTextArea"], [class*="channelTextArea"]')) return;
+        const store = findStoreByName("SelectedChannelStore");
+        const getId = store?.getChannelId as (() => string) | undefined;
+        const ch = getId?.call(store);
+        if (!ch) return;
+        const text =
+            t instanceof HTMLTextAreaElement || t instanceof HTMLInputElement
+                ? t.value
+                : (t.innerText ?? "");
+        if (text.trim()) drafts.add(ch);
+        else drafts.delete(ch);
+        refresh();
+    };
+
+    return {
+        name: "ChatInputDrafts",
+        description: "Mark channels that have unsent message drafts.",
+        authors: ["Monocord"],
+        version: "0.1.0",
+        defer: true,
+
+        start() {
+            Api.Themes.injectCss(
+                "chatinputdrafts",
+                `
+                [data-list-item-id^="channels___"] { position: relative; }
+                .mc-draft-dot {
+                    position: absolute;
+                    right: 6px;
+                    top: 50%;
+                    transform: translateY(-50%);
+                    width: 6px;
+                    height: 6px;
+                    border-radius: 50%;
+                    background: var(--brand-500, #5865f2);
+                    pointer-events: none;
+                }
+                `,
+            );
+            document.addEventListener("input", onInput, true);
+            offInput = () => document.removeEventListener("input", onInput, true);
+            stopObs = observeAdded('[data-list-item-id^="channels___"]', refresh);
+            onDomReady(refresh);
+        },
+
+        stop() {
+            offInput?.();
+            offInput = null;
+            stopObs?.();
+            stopObs = null;
+            drafts.clear();
+            document.querySelectorAll(".mc-draft-dot").forEach((d) => d.remove());
+            Api.Themes.removeCss("chatinputdrafts");
+        },
+    };
+}
+
 /** Register all "more" plugins. */
 export function registerMore(): void {
     for (const plugin of [
@@ -1199,6 +1285,7 @@ export function registerMore(): void {
         serverListAlphabeticalPlugin(),
         memberListSortPlugin(),
         noGifAutoplayPlugin(),
+        chatInputDraftsPlugin(),
     ]) {
         try {
             Api.Plugins.register(plugin);

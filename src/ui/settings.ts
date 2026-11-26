@@ -281,6 +281,47 @@ export class OverviewPanel extends PanelBase {
         h(
             "div",
             { className: "mc-card", style: { marginTop: 12 } },
+            h(
+                "div",
+                { className: "mc-head" },
+                h("div", { className: "mc-name" }, "Debug info"),
+                h(
+                    "button",
+                    {
+                        className: "mc-chip",
+                        onClick: () => {
+                            const text = [
+                                `Monocord v${Api.version}`,
+                                `Discord: ${String(info?.discord ?? "unknown")}`,
+                                `Host: Electron`,
+                                `Plugins: ${enabledCount} enabled / ${pluginCount}`,
+                                `Failed: ${failedCount}`,
+                                `Themes: ${Themes.enabled.join(", ") || "none"}`,
+                                `UA: ${navigator.userAgent}`,
+                            ].join("\n");
+                            void navigator.clipboard?.writeText(text);
+                            this.setState({ dataMsg: "Debug info copied" });
+                        },
+                    },
+                    "Copy",
+                ),
+            ),
+            h(
+                "div",
+                { className: "mc-desc", style: { minHeight: 0, opacity: 1, marginTop: 8 } },
+                "Copies framework version, Discord build, plugin/theme counts and user agent — useful for bug reports.",
+            ),
+            this.state.dataMsg
+                ? h(
+                      "div",
+                      { className: "mc-desc", style: { minHeight: 0, opacity: 1, marginTop: 8 } },
+                      this.state.dataMsg,
+                  )
+                : null,
+        ),
+        h(
+            "div",
+            { className: "mc-card", style: { marginTop: 12 } },
             h("div", { className: "mc-name" }, "Settings data"),
             h(
                 "div",

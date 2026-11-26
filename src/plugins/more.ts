@@ -515,6 +515,18 @@ const HugeAvatars = cssPlugin(
     `,
 );
 
+const BiggerServerList = cssPlugin(
+    "BiggerServerList",
+    "Larger channel names in the server sidebar.",
+    `
+    /* BiggerServerList */
+    [class*="channel"] [class*="name"],
+    [class*="channels"] [class*="name"] {
+        font-size: 15px !important;
+    }
+    `,
+);
+
 // ---------------------------------------------------------------------------
 // Functional plugins
 // ---------------------------------------------------------------------------
@@ -1031,6 +1043,7 @@ export function registerMore(): void {
         NoServerTag,
         NoEmbedFooter,
         HugeAvatars,
+        BiggerServerList,
         copyIdsPlugin(),
         friendsOnlinePlugin(),
         serverBoostsPlugin(),

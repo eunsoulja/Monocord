@@ -1180,7 +1180,34 @@ export class ThemesPanel extends PanelBase {
     return h(
         "div",
         { style: S.page },
-        h("h2", { style: S.h2 }, "Themes"),
+        h(
+            "div",
+            {
+                style: {
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                },
+            },
+            h("h2", { style: S.h2 }, "Themes"),
+            enabled.length > 0
+                ? h(
+                      "button",
+                      {
+                          className: "mc-chip",
+                          title: "Disable every enabled theme",
+                          onClick: () => {
+                              Themes.clear();
+                              void Settings.set("theme.enabled", []).catch(
+                                  () => {},
+                              );
+                              this.setState({ enabled: [] });
+                          },
+                      },
+                      "Clear all",
+                  )
+                : null,
+        ),
         h(
             "div",
             { className: "mc-warn" },

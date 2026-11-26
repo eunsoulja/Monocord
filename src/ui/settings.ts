@@ -194,6 +194,16 @@ export class OverviewPanel extends PanelBase {
         }
     }
 
+    private async retryPlugin(name: string): Promise<void> {
+        try {
+            if (Api.Plugins.isEnabled(name)) await Api.Plugins.restart(name);
+            else await Api.Plugins.enable(name);
+            this.setState({ dataMsg: `${name}: retry succeeded` });
+        } catch (e) {
+            this.setState({ dataMsg: `${name}: retry failed — ${String(e)}` });
+        }
+    }
+
     private async importSettings(file: File): Promise<void> {
         const b = this.bridge();
         if (!b) return this.setState({ dataMsg: "Bridge unavailable" });
@@ -269,6 +279,33 @@ export class OverviewPanel extends PanelBase {
                 ),
             ),
         ),
+        failedCount > 0
+            ? h(
+                  "div",
+                  { className: "mc-card", style: { marginTop: 12 } },
+                  h("div", { className: "mc-name" }, "Failed plugins"),
+                  h(
+                      "div",
+                      { className: "mc-desc", style: { minHeight: 0, opacity: 1, marginTop: 8 } },
+                      "These plugins threw during their last start/stop. Retry re-runs the lifecycle.",
+                  ),
+                  h(
+                      "div",
+                      { className: "mc-keys", style: { marginTop: 10 } },
+                      Api.Plugins.getFailures().map((n) =>
+                          h(
+                              "button",
+                              {
+                                  key: n,
+                                  className: "mc-chip",
+                                  onClick: () => void this.retryPlugin(n),
+                              },
+                              `Retry ${n}`,
+                          ),
+                      ),
+                  ),
+              )
+            : null,
         h(
             "div",
             { className: "mc-card", style: { marginTop: 12 } },

@@ -25,6 +25,7 @@ import { registerVencordLate } from "../plugins/vencord-late";
 import { registerVencordLast } from "../plugins/vencord-last";
 import { registerMore } from "../plugins/more";
 import { registerStore3 } from "../plugins/store3";
+import { vencordCompatRequire } from "../plugins/vencord-compat";
 import { SETTINGS_PLUGIN_NAME, SettingsUIPlugin } from "../plugins/settings-ui";
 
 const log = Logger.get("renderer");
@@ -40,6 +41,8 @@ function evaluatePlugin(code: string): Plugin | { default: Plugin } {
     const moduleObj = { exports: {} as Record<string, unknown> };
     const requireShim = (id: string): unknown => {
         if (id === "monocord/api" || id === "monocord") return Api;
+        const compat = vencordCompatRequire(id);
+        if (compat !== undefined) return compat;
         throw new Error(`plugin require() is not supported for "${id}"`);
     };
     const fn = new Function(

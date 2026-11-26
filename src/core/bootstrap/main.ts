@@ -1130,6 +1130,45 @@ function registerIpc(): void {
         return text;
     });
 
+    // Download a remote file to a user-picked path (emoji stealer etc.).
+    ipcMain.handle("monocord:download-url", async (_e, payload: unknown) => {
+        const p = payload as { url?: unknown; filename?: unknown };
+        if (typeof p?.url !== "string" || !/^https?:\/\//.test(p.url)) {
+            throw new Error("invalid url");
+        }
+        const filename =
+            typeof p.filename === "string" && /^[\w. ()-]{1,120}$/.test(p.filename)
+                ? p.filename
+                : "download";
+        const netApi = (
+            electron as unknown as {
+                net: { fetch(u: string, o?: unknown): Promise<Response> };
+            }
+        ).net.fetch;
+        const res = await netApi(p.url, {
+            signal: AbortSignal.timeout(30000),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const buf = Buffer.from(await res.arrayBuffer());
+        if (buf.length > 50_000_000) throw new Error("file too large");
+        const { dialog, BrowserWindow } = electron as unknown as {
+            dialog: {
+                showSaveDialog(
+                    win: unknown,
+                    opts: { defaultPath: string },
+                ): Promise<{ canceled: boolean; filePath?: string }>;
+            };
+            BrowserWindow: { getFocusedWindow(): unknown };
+        };
+        const win = BrowserWindow.getFocusedWindow();
+        const r = await dialog.showSaveDialog(win, {
+            defaultPath: path.join(os.homedir(), "Downloads", filename),
+        });
+        if (r.canceled || !r.filePath) return null;
+        fs.writeFileSync(r.filePath, buf);
+        return r.filePath;
+    });
+
     // Renderer logs arrive via ipcRenderer.invoke — must be `handle`, not
     // `on`, or the renderer's promise never resolves and logs vanish.
     ipcMain.handle(

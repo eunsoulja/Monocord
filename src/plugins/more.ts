@@ -540,6 +540,18 @@ const NoNitroBadge = cssPlugin(
     `,
 );
 
+const HideStageChannel = cssPlugin(
+    "HideStageChannel",
+    "Hide Stage channels from the channel list.",
+    `
+    /* HideStageChannel */
+    [data-list-item-id^="channels"]:has([class*="stage"]),
+    [class*="channel"]:has([class*="stage"]) {
+        display: none !important;
+    }
+    `,
+);
+
 // ---------------------------------------------------------------------------
 // Functional plugins
 // ---------------------------------------------------------------------------
@@ -1058,6 +1070,7 @@ export function registerMore(): void {
         HugeAvatars,
         BiggerServerList,
         NoNitroBadge,
+        HideStageChannel,
         copyIdsPlugin(),
         friendsOnlinePlugin(),
         serverBoostsPlugin(),

@@ -720,6 +720,9 @@ function serverBoostsPlugin(): Plugin {
                         const guild = getGuild?.(guildId);
                         const boosts = guild?.premiumSubscriberCount;
                         if (typeof boosts !== "number" || boosts <= 0) return;
+                        const tier = guild?.premiumTier;
+                        const tierText =
+                            typeof tier === "number" && tier > 0 ? ` · T${tier}` : "";
                         const badge = el(
                             "span",
                             {
@@ -734,7 +737,7 @@ function serverBoostsPlugin(): Plugin {
                                 padding: "1px 4px",
                                 lineHeight: "12px",
                             },
-                            String(boosts),
+                            `${boosts}${tierText}`,
                         );
                         badge.setAttribute("data-monocord-boosts", "1");
                         const pos = icon as HTMLElement;

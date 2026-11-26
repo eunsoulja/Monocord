@@ -1004,10 +1004,19 @@ export class PluginsPanel extends PanelBase {
                 if (filter === "on" && !enabled) return false;
                 if (filter === "off" && enabled) return false;
                 if (!q) return true;
-                return (
+                if (
                     name.toLowerCase().includes(q) ||
                     name.replace(/[A-Z]/g, (c) => ` ${c.toLowerCase()}`).includes(q) ||
                     (plugin.description ?? "").toLowerCase().includes(q)
+                ) {
+                    return true;
+                }
+                if (!plugin.settingsSchema) return false;
+                return Object.entries(plugin.settingsSchema).some(
+                    ([key, field]) =>
+                        key.toLowerCase().includes(q) ||
+                        (field.label ?? "").toLowerCase().includes(q) ||
+                        (field.description ?? "").toLowerCase().includes(q),
                 );
             })
             .sort((a, b) => a.name.localeCompare(b.name));

@@ -181,9 +181,72 @@ function lastOnlinePlugin(): Plugin {
     };
 }
 
+// ---------------------------------------------------------------------------
+// FriendsSince
+// ---------------------------------------------------------------------------
+
+function friendsSincePlugin(): Plugin {
+    let stopObserve: (() => void) | null = null;
+    let retryTimer: ReturnType<typeof setInterval> | null = null;
+    return {
+        name: "FriendsSince",
+        description: "Show a 'friends since' date on friend profile popouts.",
+        authors: ["Monocord"],
+        version: "0.1.0",
+        defer: true,
+
+        start() {
+            const arm = () => {
+                if (!installProfileCapture()) {
+                    if (!retryTimer) {
+                        let tries = 0;
+                        retryTimer = setInterval(() => {
+                            tries++;
+                            if (installProfileCapture() || tries > 20) {
+                                if (retryTimer) clearInterval(retryTimer);
+                                retryTimer = null;
+                            }
+                        }, 3000);
+                    }
+                    return false;
+                }
+                if (retryTimer) {
+                    clearInterval(retryTimer);
+                    retryTimer = null;
+                }
+                return true;
+            };
+            if (!arm()) return;
+
+            stopObserve = observeAdded(PROFILE_POPOUT_SEL, (popout) => {
+                try {
+                    const uid = userIdFromPopout(popout);
+                    if (!uid) return;
+                    const profile = profileCache.get(uid);
+                    if (!profile) return;
+                    const v =
+                        findField(profile, /friend_?since|friends_?since|friendship_?since/i) ??
+                        findField(profile, /premium_?since|nitro_?since/i);
+                    const text = formatTimestamp(v);
+                    if (text) injectBadge(popout, "data-mc-friendssince", `Friends since: ${text}`);
+                } catch {
+                    /* popout shape changed */
+                }
+            });
+        },
+
+        stop() {
+            stopObserve?.();
+            stopObserve = null;
+            if (retryTimer) clearInterval(retryTimer);
+            retryTimer = null;
+        },
+    };
+}
+
 /** Register store3 plugins. */
 export function registerStore3(): void {
-    for (const plugin of [lastOnlinePlugin()]) {
+    for (const plugin of [lastOnlinePlugin(), friendsSincePlugin()]) {
         try {
             Api.Plugins.register(plugin);
         } catch (e) {

@@ -423,6 +423,97 @@ function memberLimitPlugin(): Plugin {
     };
 }
 
+// ---------------------------------------------------------------------------
+// TimestampFormat
+// ---------------------------------------------------------------------------
+
+function timestampFormatPlugin(): Plugin {
+    const Original = Intl.DateTimeFormat;
+    let patched = false;
+
+    const apply = (locales?: Intl.LocalesArgument, options?: Intl.DateTimeFormatOptions) => {
+        const fmt = Api.Settings.getSync<string>(
+            "plugins.settings.TimestampFormat.format",
+            "system",
+        );
+        if (fmt !== "system" && options) {
+            options = { ...options };
+            if (fmt === "24h") {
+                options.hour12 = false;
+                options.hourCycle = "h23";
+            } else if (fmt === "12h") {
+                options.hour12 = true;
+                options.hourCycle = "h12";
+            }
+        }
+        return new Original(locales, options);
+    };
+
+    return {
+        name: "TimestampFormat",
+        description: "Force 12-hour or 24-hour timestamps everywhere.",
+        authors: ["Monocord"],
+        version: "0.1.0",
+        defer: true,
+        settings: { format: "system" },
+        settingsSchema: {
+            format: {
+                type: "select",
+                label: "Format",
+                options: [
+                    { value: "system", label: "System default" },
+                    { value: "12h", label: "12-hour" },
+                    { value: "24h", label: "24-hour" },
+                ],
+            },
+        },
+
+        start() {
+            if (patched) return;
+            // Wrap the constructor so every Discord timestamp respects the
+            // setting. `supportedLocalesOf` etc. are copied over.
+            const Wrapped = function (
+                this: unknown,
+                locales?: Intl.LocalesArgument,
+                options?: Intl.DateTimeFormatOptions,
+            ) {
+                return apply(locales, options) as unknown;
+            } as unknown as typeof Intl.DateTimeFormat;
+            Object.setPrototypeOf(Wrapped, Original);
+            try {
+                Object.defineProperty(Wrapped, "prototype", {
+                    value: Original.prototype,
+                    writable: false,
+                });
+            } catch {
+                /* non-configurable */
+            }
+            for (const k of Object.getOwnPropertyNames(Original)) {
+                if (k !== "length" && k !== "name" && k !== "prototype") {
+                    try {
+                        Object.defineProperty(
+                            Wrapped,
+                            k,
+                            Object.getOwnPropertyDescriptor(Original, k)!,
+                        );
+                    } catch {
+                        /* non-configurable */
+                    }
+                }
+            }
+            Intl.DateTimeFormat = Wrapped;
+            patched = true;
+        },
+
+        stop() {
+            if (patched) {
+                Intl.DateTimeFormat = Original;
+                patched = false;
+            }
+        },
+    };
+}
+
 /** Register store3 plugins. */
 export function registerStore3(): void {
     for (const plugin of [
@@ -430,6 +521,7 @@ export function registerStore3(): void {
         friendsSincePlugin(),
         serverRegionPlugin(),
         memberLimitPlugin(),
+        timestampFormatPlugin(),
     ]) {
         try {
             Api.Plugins.register(plugin);

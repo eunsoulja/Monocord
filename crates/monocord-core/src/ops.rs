@@ -38,7 +38,7 @@ pub fn install_monocord(paths: &ConfigPaths, channel: Channel, force: bool) -> R
     // Deploy embedded framework bundles, then patch app.asar.
     let bootstrap = bundled::ensure_bootstrap(paths)?;
 
-    match patch::inspect(&inst.resources) {
+    match patch::inspect_install(&inst) {
         PatchState::Foreign { hint } if !force => {
             return Err(Error::UnsafeOperation(format!(
                 "app.asar is owned by another modification ({hint}); \

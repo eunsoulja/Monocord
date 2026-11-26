@@ -264,7 +264,7 @@ fn cmd_uninstall(paths: &ConfigPaths, channel: &str) -> anyhow::Result<()> {
 fn cmd_patch_status(channel: &str) -> anyhow::Result<()> {
     let channel = channel_arg(channel)?;
     let inst = find_install(channel)?;
-    match monocord_core::patch::inspect(&inst.resources) {
+    match monocord_core::patch::inspect_install(&inst) {
         monocord_core::PatchState::Monocord => println!("monocord"),
         monocord_core::PatchState::Pristine => println!("pristine"),
         monocord_core::PatchState::Foreign { hint } => println!("foreign: {hint}"),
@@ -278,7 +278,7 @@ fn cmd_patch_status(channel: &str) -> anyhow::Result<()> {
 // ---------------------------------------------------------------------------
 
 fn patch_state_label(inst: &monocord_core::DiscordInstall) -> String {
-    match monocord_core::patch::inspect(&inst.resources) {
+    match monocord_core::patch::inspect_install(&inst) {
         monocord_core::PatchState::Monocord => "monocord installed".to_string(),
         monocord_core::PatchState::Pristine => "not installed".to_string(),
         monocord_core::PatchState::Foreign { hint } => format!("foreign patch ({hint})"),
@@ -344,7 +344,7 @@ fn interactive_install(paths: &ConfigPaths) -> anyhow::Result<()> {
     let inst = find_install(channel)?;
     let mut force = false;
     if let monocord_core::PatchState::Foreign { hint } =
-        monocord_core::patch::inspect(&inst.resources)
+        monocord_core::patch::inspect_install(&inst)
     {
         println!("\nwarning: app.asar is owned by another modification ({hint})");
         if !confirm("overwrite it and install Monocord?") {

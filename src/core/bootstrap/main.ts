@@ -1251,7 +1251,15 @@ const appAsar = path.join(
     (process as NodeJS.Process & { resourcesPath: string }).resourcesPath,
     "_app.asar",
 );
-if (!fs.existsSync(appAsar)) {
+// Discord 1.0.9xxx+ modular layout: we're required by
+// modules/discord_desktop_core-*/index.js, which itself requires
+// core.asar right after we return — nothing for us to hand off to.
+const modularParent = (module.parent?.filename ?? "").includes(
+    "discord_desktop_core",
+);
+if (modularParent) {
+    log("modular layout detected — returning to module index.js");
+} else if (!fs.existsSync(appAsar)) {
     log(`FATAL: ${appAsar} not found — cannot start Discord`);
     electron.app.quit();
 } else {

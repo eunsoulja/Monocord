@@ -79,8 +79,37 @@ pub fn classify_entry(content: &str) -> PatchState {
     {
         return PatchState::Pristine;
     }
+    // Discord 1.0.9xxx+ modular layout: the desktop-core module entry is a
+    // plain file whose whole job is `module.exports = require('./core.asar')`.
+    if trimmed.contains("core.asar")
+        && trimmed.contains("require(")
+        && trimmed.contains("module.exports")
+        && trimmed.len() < 400
+    {
+        return PatchState::Pristine;
+    }
     PatchState::Foreign {
         hint: trimmed.chars().take(80).collect(),
+    }
+}
+
+/// Inspect a plain-JS module entry file (modular layout) and classify it.
+#[must_use]
+pub fn inspect_module_entry(path: &Path) -> PatchState {
+    match std::fs::read(path) {
+        Ok(bytes) => classify_entry(&String::from_utf8_lossy(&bytes)),
+        Err(e) => PatchState::Unreadable {
+            reason: e.to_string(),
+        },
+    }
+}
+
+/// Inspect whichever entry point this install uses (modular or asar).
+#[must_use]
+pub fn inspect_install(install: &crate::discord::DiscordInstall) -> PatchState {
+    match &install.module_entry {
+        Some(entry) => inspect_module_entry(entry),
+        None => inspect(&install.resources),
     }
 }
 
@@ -95,15 +124,48 @@ pub fn entry_payload(bootstrap_path: &Path) -> Vec<u8> {
     format!("// Monocord bootstrap\nrequire({quoted});\n").into_bytes()
 }
 
-/// Build the install plan that patches `app.asar` for this Discord install.
+/// Modular-layout payload: our bootstrap require followed by the file's
+/// original content, so `module.exports = require('./core.asar')` still
+/// runs after we return and hands the real app back to Discord.
+#[must_use]
+pub fn module_entry_payload(bootstrap_path: &Path, original: &[u8]) -> Vec<u8> {
+    let mut v = entry_payload(bootstrap_path);
+    v.extend_from_slice(original);
+    v
+}
+
+/// Build the install plan for this Discord install.
 ///
-/// `bootstrap_path` must point at the built `dist/main.js`. The plan is a
-/// single `Overwrite` of `resources/app.asar` with the entry script swapped;
-/// the installer snapshots the original archive first.
+/// `bootstrap_path` must point at the built `dist/main.js`. Two layouts:
+///
+/// * **Modular (Discord 1.0.9xxx+)** — overwrite
+///   `modules/discord_desktop_core-*/discord_desktop_core/index.js` with
+///   our require prepended to the original `require('./core.asar')`.
+/// * **Legacy** — repack `resources/app.asar` with `index.js` swapped for
+///   our require (the bootstrap itself loads `_app.asar`).
 pub fn build_plan(
     install: &crate::discord::DiscordInstall,
     bootstrap_path: &Path,
 ) -> Result<InstallPlan> {
+    if let Some(entry) = &install.module_entry {
+        let original = std::fs::read(entry).map_err(|e| {
+            Error::UnsafeOperation(format!("cannot read {}: {e}", entry.display()))
+        })?;
+        let rel = entry
+            .strip_prefix(&install.version_dir)
+            .map_err(|_| {
+                Error::UnsafeOperation(format!(
+                    "module entry {} is outside {}",
+                    entry.display(),
+                    install.version_dir.display()
+                ))
+            })?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let payload = module_entry_payload(bootstrap_path, &original);
+        return Ok(InstallPlan::new().op(FileOp::write(rel, payload)));
+    }
+
     let archive_path = install.resources.join(ARCHIVE_NAME);
     let asar = Asar::from_file(&archive_path).map_err(|e| {
         Error::UnsafeOperation(format!("cannot read {}: {e}", archive_path.display()))

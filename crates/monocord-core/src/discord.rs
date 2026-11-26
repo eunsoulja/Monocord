@@ -81,6 +81,13 @@ pub struct DiscordInstall {
     pub exe: PathBuf,
     /// `resources/` directory inside the version dir.
     pub resources: PathBuf,
+    ///
+    /// Discord 1.0.9xxx+ moved the app out of `app.asar`/`_app.asar` into
+    /// `modules/discord_desktop_core-*/discord_desktop_core/index.js` —
+    /// a plain JS file that requires `core.asar`. `Some` means the modular
+    /// layout is present and patching should target that file instead of
+    /// repacking `app.asar`.
+    pub module_entry: Option<PathBuf>,
     /// Discord version string (e.g. `1.0.9269`).
     pub version: String,
     /// Release channel string reported by `build_info.json`.
@@ -144,11 +151,37 @@ pub fn detect_in(root: &Path, channel: Channel) -> Result<DiscordInstall> {
     Ok(DiscordInstall {
         channel,
         root: root.to_path_buf(),
-        version_dir,
+        version_dir: version_dir.clone(),
         exe,
         resources,
+        module_entry: find_module_entry(&version_dir),
         version,
         release_channel,
+    })
+}
+
+/// Locate `modules/discord_desktop_core-*/discord_desktop_core/index.js`.
+///
+/// The `-N` suffix is an install-order index that can change between
+/// updates, so scan `modules/` rather than hardcoding it. When several
+/// revisions exist, the highest-sorted directory wins.
+fn find_module_entry(version_dir: &Path) -> Option<PathBuf> {
+    let modules = version_dir.join("modules");
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(&modules)
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.is_dir()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.starts_with("discord_desktop_core-"))
+                    .unwrap_or(false)
+        })
+        .collect();
+    dirs.sort();
+    dirs.iter().rev().find_map(|dir| {
+        let entry = dir.join("discord_desktop_core").join("index.js");
+        entry.is_file().then_some(entry)
     })
 }
 

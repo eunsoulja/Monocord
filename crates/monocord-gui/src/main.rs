@@ -59,7 +59,7 @@ impl InstallerApp {
         self.patch_states = self
             .installs
             .iter()
-            .map(|i| mc::patch::inspect(&i.resources))
+            .map(|i| mc::patch::inspect_install(&i))
             .collect();
         self.discord_running = !mc::running_discord_processes().is_empty();
     }

@@ -540,6 +540,19 @@ const NoNitroBadge = cssPlugin(
     `,
 );
 
+const CompactRoles = cssPlugin(
+    "CompactRoles",
+    "Tighter spacing on role groups in the member list.",
+    `
+    /* CompactRoles */
+    [class*="roleName"],
+    [class*="member"] [class*="group"] {
+        padding-top: 2px !important;
+        padding-bottom: 2px !important;
+    }
+    `,
+);
+
 const HideStageChannel = cssPlugin(
     "HideStageChannel",
     "Hide Stage channels from the channel list.",
@@ -1071,6 +1084,7 @@ export function registerMore(): void {
         BiggerServerList,
         NoNitroBadge,
         HideStageChannel,
+        CompactRoles,
         copyIdsPlugin(),
         friendsOnlinePlugin(),
         serverBoostsPlugin(),

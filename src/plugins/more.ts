@@ -566,6 +566,114 @@ function friendsOnlinePlugin(): Plugin {
     };
 }
 
+/**
+ * ServerBoosts — shows the server's boost count as a small badge on its
+ * icon in the guild sidebar. Reads GuildStore via the guild ID encoded in
+ * the icon's `data-list-item-id` (`guildsnav___<id>`).
+ */
+function serverBoostsPlugin(): Plugin {
+    let stopObserve: (() => void) | null = null;
+    return {
+        name: "ServerBoosts",
+        description: "Show server boost count as a badge on guild icons.",
+        authors: ["Monocord"],
+        version: "0.1.0",
+        defer: true,
+
+        start() {
+            stopObserve = observeAdded(
+                '[class*="guilds"] [class*="avatar"], [class*="guilds"] [class*="icon"]',
+                (icon) => {
+                    try {
+                        if (icon.querySelector("[data-monocord-boosts]")) return;
+                        const wrapper = icon.closest("[data-list-item-id]");
+                        const raw = wrapper?.getAttribute("data-list-item-id") ?? "";
+                        const guildId = raw.split("___").pop();
+                        if (!guildId || !/^\d+$/.test(guildId)) return;
+                        const guilds = findStoreByName("GuildStore");
+                        const getGuild = guilds?.getGuild as
+                            | ((id: string) => Record<string, unknown> | undefined)
+                            | undefined;
+                        const guild = getGuild?.(guildId);
+                        const boosts = guild?.premiumSubscriberCount;
+                        if (typeof boosts !== "number" || boosts <= 0) return;
+                        const badge = el(
+                            "span",
+                            {
+                                position: "absolute",
+                                bottom: "-2px",
+                                right: "-2px",
+                                background: "var(--status-positive, #23a55a)",
+                                color: "#fff",
+                                fontSize: "10px",
+                                fontWeight: "700",
+                                borderRadius: "8px",
+                                padding: "1px 4px",
+                                lineHeight: "12px",
+                            },
+                            String(boosts),
+                        );
+                        badge.setAttribute("data-monocord-boosts", "1");
+                        const pos = icon as HTMLElement;
+                        if (getComputedStyle(pos).position === "static") {
+                            pos.style.position = "relative";
+                        }
+                        pos.append(badge);
+                    } catch {
+                        /* store or DOM shape changed — skip */
+                    }
+                },
+            );
+        },
+
+        stop() {
+            stopObserve?.();
+            stopObserve = null;
+            document
+                .querySelectorAll("[data-monocord-boosts]")
+                .forEach((n) => n.remove());
+        },
+    };
+}
+
+/**
+ * GifStealth — Alt+click a GIF/tenor image copies its URL to the clipboard
+ * instead of opening Discord's preview. Mirrors Vencord's gifStealthMode.
+ */
+function gifStealthPlugin(): Plugin {
+    let off: (() => void) | null = null;
+    return {
+        name: "GifStealth",
+        description: "Alt+click a GIF to copy its URL instead of previewing it.",
+        authors: ["Monocord"],
+        version: "0.1.0",
+        defer: true,
+
+        start() {
+            const handler = (ev: MouseEvent) => {
+                if (!ev.altKey) return;
+                const t = ev.target;
+                if (!(t instanceof HTMLImageElement)) return;
+                const src = t.currentSrc || t.src;
+                if (!/tenor|giphy|gif/i.test(src)) return;
+                ev.preventDefault();
+                ev.stopPropagation();
+                void navigator.clipboard?.writeText(src).then(
+                    () => toast("GIF URL copied"),
+                    () => toast(`Copy failed — ${src}`),
+                );
+            };
+            document.addEventListener("click", handler, true);
+            off = () => document.removeEventListener("click", handler, true);
+        },
+
+        stop() {
+            off?.();
+            off = null;
+        },
+    };
+}
+
 /** Register all "more" plugins. */
 export function registerMore(): void {
     for (const plugin of [
@@ -601,6 +709,8 @@ export function registerMore(): void {
         FlatAvatars,
         copyIdsPlugin(),
         friendsOnlinePlugin(),
+        serverBoostsPlugin(),
+        gifStealthPlugin(),
     ]) {
         try {
             Api.Plugins.register(plugin);

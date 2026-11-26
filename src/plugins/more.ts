@@ -1092,6 +1092,57 @@ function memberListSortPlugin(): Plugin {
     };
 }
 
+/**
+ * NoGifAutoplay — pauses <video> GIFs in the message area; click toggles
+ * play/pause. Discord renders tenor/giphy embeds as video elements.
+ */
+function noGifAutoplayPlugin(): Plugin {
+    let stop: (() => void) | null = null;
+    const offs: (() => void)[] = [];
+    return {
+        name: "NoGifAutoplay",
+        description: "Pause GIFs in chat until you click them.",
+        authors: ["Monocord"],
+        version: "0.1.0",
+        defer: true,
+
+        start() {
+            const pause = (v: HTMLVideoElement) => {
+                if (!v.paused) {
+                    v.pause();
+                    v.dataset.mcGifPaused = "1";
+                }
+            };
+            stop = observeAdded(
+                '[id^="chat-messages"] video, [class*="embed"] video',
+                (node) => {
+                    if (node instanceof HTMLVideoElement) pause(node);
+                },
+            );
+            const toggle = (ev: MouseEvent) => {
+                const t = ev.target;
+                if (!(t instanceof HTMLVideoElement)) return;
+                if (t.paused) {
+                    void t.play().catch(() => {});
+                    delete t.dataset.mcGifPaused;
+                } else {
+                    t.pause();
+                    t.dataset.mcGifPaused = "1";
+                }
+            };
+            document.addEventListener("click", toggle, true);
+            offs.push(() => document.removeEventListener("click", toggle, true));
+        },
+
+        stop() {
+            stop?.();
+            stop = null;
+            for (const off of offs) off();
+            offs.length = 0;
+        },
+    };
+}
+
 /** Register all "more" plugins. */
 export function registerMore(): void {
     for (const plugin of [
@@ -1147,6 +1198,7 @@ export function registerMore(): void {
         copyMsgLinkPlugin(),
         serverListAlphabeticalPlugin(),
         memberListSortPlugin(),
+        noGifAutoplayPlugin(),
     ]) {
         try {
             Api.Plugins.register(plugin);

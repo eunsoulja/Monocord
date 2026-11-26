@@ -1308,6 +1308,163 @@ function emojiStealerPlugin(): Plugin {
     };
 }
 
+/**
+ * FolderTint — right-click a server folder to recolor its icon.
+ * Colors persist per folder (keyed by folder id or first guild id)
+ * under `plugins.settings.FolderTint.colors`.
+ */
+function folderTintPlugin(): Plugin {
+    const TINTS: Record<string, string> = {
+        none: "",
+        red: "sepia(1) saturate(6) hue-rotate(-50deg)",
+        orange: "sepia(1) saturate(6) hue-rotate(-8deg)",
+        yellow: "sepia(1) saturate(6) hue-rotate(18deg)",
+        green: "sepia(1) saturate(6) hue-rotate(75deg)",
+        blue: "sepia(1) saturate(6) hue-rotate(195deg)",
+        purple: "sepia(1) saturate(6) hue-rotate(265deg)",
+        pink: "sepia(1) saturate(6) hue-rotate(305deg)",
+    };
+    const NAMES: Record<string, string> = {
+        none: "Default",
+        red: "Red",
+        orange: "Orange",
+        yellow: "Yellow",
+        green: "Green",
+        blue: "Blue",
+        purple: "Purple",
+        pink: "Pink",
+    };
+
+    let colors: Record<string, string> = {};
+    let stopObs: (() => void) | null = null;
+    let offCtx: (() => void) | null = null;
+
+    const loadColors = async () => {
+        colors =
+            ((await Api.Settings.get<Record<string, string>>(
+                "plugins.settings.FolderTint.colors",
+                {},
+            )) as Record<string, string>) ?? {};
+        applyAll();
+    };
+
+    /** Find the folder element containing `target`, if any. */
+    const folderEl = (target: Element | null): HTMLElement | null => {
+        let node = target;
+        for (let i = 0; i < 8 && node instanceof HTMLElement; i++) {
+            const id = node.dataset?.listItemId ?? "";
+            if (id.startsWith("guild-folders___")) return node;
+            // Fallback: element that looks like a folder and contains guilds.
+            if (
+                /folder/i.test(node.className?.toString() ?? "") &&
+                node.querySelector('[data-list-item-id^="guilds___"]')
+            ) {
+                return node;
+            }
+            node = node.parentElement;
+        }
+        return null;
+    };
+
+    const folderKey = (el: HTMLElement): string | null => {
+        const id = el.dataset?.listItemId ?? "";
+        if (id.startsWith("guild-folders___")) {
+            return id.slice("guild-folders___".length);
+        }
+        const g = el
+            .querySelector('[data-list-item-id^="guilds___"]')
+            ?.getAttribute("data-list-item-id");
+        return g ? g.slice("guilds___".length) : null;
+    };
+
+    const applyTint = (el: HTMLElement) => {
+        const key = folderKey(el);
+        const tint = key ? colors[key] : undefined;
+        // Folder glyph is an <svg>; guild icons inside are divs/images,
+        // so an svg inside the folder row is (almost always) the folder icon
+        // or its chevron — prefer icon-ish wrappers, else first svg.
+        const icon =
+            el.querySelector<HTMLElement>(
+                '[class*="icon"] svg, [class*="folderIcon"] svg',
+            ) ?? el.querySelector<HTMLElement>("svg");
+        const target = icon?.parentElement ?? icon;
+        if (target instanceof HTMLElement) {
+            target.style.filter = tint ? (TINTS[tint] ?? "") : "";
+            target.dataset.mcTint = tint ?? "";
+        }
+    };
+
+    const applyAll = () => {
+        document
+            .querySelectorAll<HTMLElement>(
+                '[data-list-item-id^="guild-folders"], [class*="folder"]',
+            )
+            .forEach((el) => {
+                if (folderKey(el)) applyTint(el);
+            });
+    };
+
+    const onContext = (ev: MouseEvent) => {
+        const el = folderEl(ev.target as Element | null);
+        if (!el) return;
+        const key = folderKey(el);
+        if (!key) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const current = colors[key] ?? "none";
+        contextMenu(
+            ev.clientX,
+            ev.clientY,
+            Object.keys(TINTS).map((tint) => ({
+                label: `${current === tint ? "✓ " : ""}${NAMES[tint] ?? tint}`,
+                action: () => {
+                    const next = { ...colors };
+                    if (tint === "none") delete next[key];
+                    else next[key] = tint;
+                    colors = next;
+                    void Api.Settings.set(
+                        "plugins.settings.FolderTint.colors",
+                        next,
+                    ).catch(() => {});
+                    applyTint(el);
+                    toast(`Folder color: ${NAMES[tint] ?? tint}`);
+                },
+            })),
+        );
+    };
+
+    return {
+        name: "FolderTint",
+        description: "Right-click a server folder to recolor its icon.",
+        authors: ["Monocord"],
+        version: "0.1.0",
+        defer: true,
+        settings: { colors: {} },
+
+        start() {
+            void loadColors();
+            stopObs = observeAdded(
+                '[data-list-item-id^="guild-folders"], [class*="folder"]',
+                (node) => {
+                    if (node instanceof HTMLElement && folderKey(node)) {
+                        applyTint(node);
+                    }
+                },
+            );
+            document.addEventListener("contextmenu", onContext, true);
+            offCtx = () =>
+                document.removeEventListener("contextmenu", onContext, true);
+        },
+
+        stop() {
+            stopObs?.();
+            stopObs = null;
+            offCtx?.();
+            offCtx = null;
+        },
+    };
+}
+
 /** Register all "more" plugins. */
 export function registerMore(): void {
     for (const plugin of [
@@ -1366,6 +1523,7 @@ export function registerMore(): void {
         noGifAutoplayPlugin(),
         chatInputDraftsPlugin(),
         emojiStealerPlugin(),
+        folderTintPlugin(),
     ]) {
         try {
             Api.Plugins.register(plugin);

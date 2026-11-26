@@ -244,9 +244,106 @@ function friendsSincePlugin(): Plugin {
     };
 }
 
+// ---------------------------------------------------------------------------
+// ServerRegion
+// ---------------------------------------------------------------------------
+
+function serverRegionPlugin(): Plugin {
+    let timer: ReturnType<typeof setInterval> | null = null;
+    let stopObserve: (() => void) | null = null;
+
+    const region = (): string | null => {
+        for (const name of ["RTCRegionStore", "VoiceRegionStore", "RTCStore"]) {
+            try {
+                const store = findStoreByName(name);
+                if (!store) continue;
+                for (const key of ["getRegion", "getCurrentRegion", "region"]) {
+                    const v = store[key];
+                    const r =
+                        typeof v === "function"
+                            ? (v as () => unknown).call(store)
+                            : v;
+                    if (typeof r === "string" && r) return r;
+                    if (isObj(r) && typeof r.region === "string") return r.region;
+                    if (isObj(r) && typeof r.name === "string") return r.name;
+                }
+            } catch {
+                /* keep probing */
+            }
+        }
+        return null;
+    };
+
+    const inVoiceChannel = (): boolean => {
+        try {
+            const sel = findStoreByName("SelectedChannelStore");
+            const getChannel = sel?.getChannel as
+                | (() => Record<string, unknown> | undefined)
+                | undefined;
+            const ch = getChannel?.();
+            const t = ch?.type;
+            return t === 2 || t === 13 || t === 14; // voice / stage / stage-thread
+        } catch {
+            return false;
+        }
+    };
+
+    const update = () => {
+        const badge = document.querySelector("[data-mc-region]");
+        if (!inVoiceChannel()) {
+            badge?.remove();
+            return;
+        }
+        const r = region();
+        if (!r) {
+            badge?.remove();
+            return;
+        }
+        if (badge) {
+            badge.textContent = r;
+            return;
+        }
+        const header = document.querySelector(
+            '[class*="chat"] [class*="header"], [class*="guildHeader"]',
+        );
+        if (!header) return;
+        const el = document.createElement("span");
+        el.setAttribute("data-mc-region", "1");
+        Object.assign(el.style, {
+            marginLeft: "8px",
+            fontSize: "12px",
+            color: "var(--text-muted, #949ba4)",
+        });
+        el.textContent = r;
+        header.append(el);
+    };
+
+    return {
+        name: "ServerRegion",
+        description: "Show your voice server's region in the channel header.",
+        authors: ["Monocord"],
+        version: "0.1.0",
+        defer: true,
+
+        start() {
+            timer = setInterval(update, 15000);
+            update();
+            stopObserve = observeAdded('[class*="header"]', () => update());
+        },
+
+        stop() {
+            if (timer) clearInterval(timer);
+            timer = null;
+            stopObserve?.();
+            stopObserve = null;
+            document.querySelectorAll("[data-mc-region]").forEach((n) => n.remove());
+        },
+    };
+}
+
 /** Register store3 plugins. */
 export function registerStore3(): void {
-    for (const plugin of [lastOnlinePlugin(), friendsSincePlugin()]) {
+    for (const plugin of [lastOnlinePlugin(), friendsSincePlugin(), serverRegionPlugin()]) {
         try {
             Api.Plugins.register(plugin);
         } catch (e) {

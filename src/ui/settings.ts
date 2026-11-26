@@ -560,6 +560,21 @@ export class PluginsPanel extends PanelBase {
         void p.catch((e) => log.error(`toggle ${name} failed`, e));
     }
 
+    private async toggleAll(enable: boolean): Promise<void> {
+        for (const name of Api.Plugins.names()) {
+            if (name === "MonocordSettings") continue;
+            const op = enable
+                ? Api.Plugins.isEnabled(name)
+                    ? Promise.resolve()
+                    : Api.Plugins.enable(name)
+                : Api.Plugins.isEnabled(name)
+                  ? Api.Plugins.disable(name)
+                  : Promise.resolve();
+            await op.catch((e) => log.error(`toggle ${name} failed`, e));
+        }
+        this.forceUpdate();
+    }
+
     private renderToggle(name: string, enabled: boolean): unknown {
         return h(
             "button",
@@ -829,6 +844,28 @@ export class PluginsPanel extends PanelBase {
                         label,
                         h("span", { className: "mc-count" }, String(counts[value])),
                     ),
+                ),
+                h(
+                    "span",
+                    { style: { flex: 1 } },
+                ),
+                h(
+                    "button",
+                    {
+                        className: "mc-chip",
+                        title: "Enable every plugin (except the settings UI)",
+                        onClick: () => void this.toggleAll(true),
+                    },
+                    "Enable all",
+                ),
+                h(
+                    "button",
+                    {
+                        className: "mc-chip",
+                        title: "Disable every plugin (except the settings UI)",
+                        onClick: () => void this.toggleAll(false),
+                    },
+                    "Disable all",
                 ),
             ),
             rows.length === 0

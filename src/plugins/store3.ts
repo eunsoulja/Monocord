@@ -341,9 +341,96 @@ function serverRegionPlugin(): Plugin {
     };
 }
 
+// ---------------------------------------------------------------------------
+// MemberLimit
+// ---------------------------------------------------------------------------
+
+function memberLimitPlugin(): Plugin {
+    let stopObserve: (() => void) | null = null;
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    const update = () => {
+        const badge = document.querySelector("[data-mc-memberlimit]");
+        try {
+            const sel = findStoreByName("SelectedChannelStore");
+            const getGuildId = sel?.getGuildId as (() => string | null) | undefined;
+            const guildId = getGuildId?.();
+            const guilds = findStoreByName("GuildStore");
+            const getGuild = guilds?.getGuild as
+                | ((id: string) => Record<string, unknown> | undefined)
+                | undefined;
+            const g = guildId ? getGuild?.(guildId) : undefined;
+            if (!g) {
+                badge?.remove();
+                return;
+            }
+            const count =
+                (g.approximateMemberCount as number) ?? (g.memberCount as number);
+            const max =
+                (g.maxMembers as number) ??
+                (g.max_members as number) ??
+                (g.approximateMaxMembers as number);
+            if (typeof count !== "number" || typeof max !== "number" || max <= 0) {
+                badge?.remove();
+                return;
+            }
+            const text = `${count.toLocaleString()} / ${max.toLocaleString()}`;
+            if (badge) {
+                badge.textContent = text;
+                return;
+            }
+            const header = document.querySelector(
+                '[class*="members"] [class*="header"], [class*="memberList"] [class*="title"], [class*="membersWrap"]',
+            );
+            if (!header) return;
+            const el = document.createElement("span");
+            el.setAttribute("data-mc-memberlimit", "1");
+            Object.assign(el.style, {
+                marginLeft: "8px",
+                fontSize: "12px",
+                color: "var(--text-muted, #949ba4)",
+            });
+            el.textContent = text;
+            header.append(el);
+        } catch {
+            /* stores not ready */
+        }
+    };
+
+    return {
+        name: "MemberLimit",
+        description: "Show 'x / y members' in the member list when the server has a cap.",
+        authors: ["Monocord"],
+        version: "0.1.0",
+        defer: true,
+
+        start() {
+            timer = setInterval(update, 20000);
+            update();
+            stopObserve = observeAdded(
+                '[class*="members"] [class*="header"], [class*="memberList"] [class*="title"], [class*="membersWrap"]',
+                () => update(),
+            );
+        },
+
+        stop() {
+            if (timer) clearInterval(timer);
+            timer = null;
+            stopObserve?.();
+            stopObserve = null;
+            document.querySelectorAll("[data-mc-memberlimit]").forEach((n) => n.remove());
+        },
+    };
+}
+
 /** Register store3 plugins. */
 export function registerStore3(): void {
-    for (const plugin of [lastOnlinePlugin(), friendsSincePlugin(), serverRegionPlugin()]) {
+    for (const plugin of [
+        lastOnlinePlugin(),
+        friendsSincePlugin(),
+        serverRegionPlugin(),
+        memberLimitPlugin(),
+    ]) {
         try {
             Api.Plugins.register(plugin);
         } catch (e) {

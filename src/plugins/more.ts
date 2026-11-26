@@ -247,6 +247,151 @@ const NoGifHover = cssPlugin(
     `,
 );
 
+const CompactMembers = cssPlugin(
+    "CompactMembers",
+    "Tighter member list rows — more members visible at once.",
+    `
+    /* CompactMembers */
+    [class*="member"] [class*="container"],
+    [class*="members"] [class*="item"] {
+        padding-top: 2px !important;
+        padding-bottom: 2px !important;
+    }
+    `,
+);
+
+const ThinGuilds = cssPlugin(
+    "ThinGuilds",
+    "Tighter spacing in the server and channel lists.",
+    `
+    /* ThinGuilds */
+    [class*="guilds"] {
+        padding-top: 4px !important;
+        padding-bottom: 4px !important;
+    }
+    [class*="channels"] [class*="container"],
+    [class*="channels"] [class*="channel"] {
+        padding-top: 2px !important;
+        padding-bottom: 2px !important;
+    }
+    `,
+);
+
+const WiderChat = cssPlugin(
+    "WiderChat",
+    "Let messages use more of the window width.",
+    `
+    /* WiderChat */
+    [class*="chat"] [class*="content"],
+    [id^="chat-messages"] {
+        max-width: none !important;
+    }
+    `,
+);
+
+const ChatInputHeight = cssPlugin(
+    "ChatInputHeight",
+    "Taller message input box.",
+    `
+    /* ChatInputHeight */
+    [class*="channelTextArea"],
+    [class*="slateTextArea"] {
+        min-height: 44px !important;
+    }
+    `,
+);
+
+const MemberListOpacity = cssPlugin(
+    "MemberListOpacity",
+    "Fade the member list until hovered.",
+    `
+    /* MemberListOpacity */
+    [class*="memberList"],
+    [class*="members"] {
+        opacity: 0.55;
+        transition: opacity .15s;
+    }
+    [class*="memberList"]:hover,
+    [class*="members"]:hover {
+        opacity: 1;
+    }
+    `,
+);
+
+const NoChannelFade = cssPlugin(
+    "NoChannelFade",
+    "Remove the fade gradient at the bottom of the chat.",
+    `
+    /* NoChannelFade */
+    [class*="scroller"]::after,
+    [class*="chat"]::after {
+        display: none !important;
+    }
+    `,
+);
+
+const BiggerServerHeader = cssPlugin(
+    "BiggerServerHeader",
+    "Larger channel header text.",
+    `
+    /* BiggerServerHeader */
+    [class*="header"] [class*="title"],
+    [class*="guildHeader"] {
+        font-size: 17px !important;
+    }
+    `,
+);
+
+const NoImageHover = cssPlugin(
+    "NoImageHover",
+    "Disable Discord's native image hover preview.",
+    `
+    /* NoImageHover */
+    [class*="imageContent"] img,
+    [class*="embedMedia"] img {
+        pointer-events: none;
+    }
+    `,
+);
+
+const GuildIconBorder = cssPlugin(
+    "GuildIconBorder",
+    "Add a subtle border around server icons.",
+    `
+    /* GuildIconBorder */
+    [class*="guilds"] [class*="avatar"],
+    [class*="guilds"] [class*="icon"] {
+        border: 2px solid var(--background-accent, #383a40) !important;
+    }
+    `,
+);
+
+const NoUnreadBadge = cssPlugin(
+    "NoUnreadBadge",
+    "Hide unread mention count badges.",
+    `
+    /* NoUnreadBadge */
+    [class*="badge"],
+    [class*="unreadBadge"] {
+        display: none !important;
+    }
+    `,
+);
+
+const FlatAvatars = cssPlugin(
+    "FlatAvatars",
+    "Remove avatar hover lift and shadow.",
+    `
+    /* FlatAvatars */
+    [class*="avatar"] {
+        box-shadow: none !important;
+    }
+    [class*="avatar"]:hover {
+        transform: none !important;
+    }
+    `,
+);
+
 // ---------------------------------------------------------------------------
 // Functional plugins
 // ---------------------------------------------------------------------------
@@ -443,6 +588,17 @@ export function registerMore(): void {
         NoChannelIcons,
         FlatScrollbars,
         NoGifHover,
+        CompactMembers,
+        ThinGuilds,
+        WiderChat,
+        ChatInputHeight,
+        MemberListOpacity,
+        NoChannelFade,
+        BiggerServerHeader,
+        NoImageHover,
+        GuildIconBorder,
+        NoUnreadBadge,
+        FlatAvatars,
         copyIdsPlugin(),
         friendsOnlinePlugin(),
     ]) {

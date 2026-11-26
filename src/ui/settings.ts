@@ -163,7 +163,58 @@ function Badge(props: { ok: boolean; text: string }) {
 // ---------------------------------------------------------------------------
 
 export class OverviewPanel extends PanelBase {
-    override state: { info: Record<string, unknown> | null } = { info: null };
+    override state: {
+        info: Record<string, unknown> | null;
+        dataMsg: string;
+        importing: boolean;
+    } = { info: null, dataMsg: "", importing: false };
+
+    private bridge(): { invoke(c: string, ...a: unknown[]): Promise<unknown> } | null {
+        return (window as { monocord?: { invoke(c: string, ...a: unknown[]): Promise<unknown> } })
+            .monocord ?? null;
+    }
+
+    private async exportSettings(): Promise<void> {
+        const b = this.bridge();
+        if (!b) return this.setState({ dataMsg: "Bridge unavailable" });
+        try {
+            const doc = await b.invoke("settings-get");
+            const blob = new Blob([JSON.stringify(doc, null, 2)], {
+                type: "application/json",
+            });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "monocord-settings.json";
+            a.click();
+            URL.revokeObjectURL(url);
+            this.setState({ dataMsg: "Settings exported" });
+        } catch (e) {
+            this.setState({ dataMsg: `Export failed: ${String(e)}` });
+        }
+    }
+
+    private async importSettings(file: File): Promise<void> {
+        const b = this.bridge();
+        if (!b) return this.setState({ dataMsg: "Bridge unavailable" });
+        this.setState({ importing: true, dataMsg: "Importing…" });
+        try {
+            const text = await file.text();
+            const imported = JSON.parse(text) as Record<string, unknown>;
+            if (typeof imported !== "object" || imported === null || Array.isArray(imported)) {
+                throw new Error("not a settings object");
+            }
+            const current =
+                ((await b.invoke("settings-get")) as Record<string, unknown>) ?? {};
+            // Shallow merge: imported top-level keys win, the rest are kept.
+            await b.invoke("settings-save", { ...current, ...imported });
+            this.setState({ dataMsg: "Settings imported — reload Discord to apply" });
+        } catch (e) {
+            this.setState({ dataMsg: `Import failed: ${String(e)}` });
+        } finally {
+            this.setState({ importing: false });
+        }
+    }
 
     componentDidMount(): void {
         ensurePluginsCss();
@@ -226,6 +277,53 @@ export class OverviewPanel extends PanelBase {
                 { className: "mc-desc", style: { minHeight: 0, opacity: 1 } },
                 "Monocord is a Vencord-inspired modification framework. Manage plugins from the Plugins tab and themes from the Themes tab.",
             ),
+        ),
+        h(
+            "div",
+            { className: "mc-card", style: { marginTop: 12 } },
+            h("div", { className: "mc-name" }, "Settings data"),
+            h(
+                "div",
+                { className: "mc-desc", style: { minHeight: 0, opacity: 1, marginTop: 8 } },
+                "Export downloads your plugin/theme/CSS settings as JSON. Import merges a previously exported file (imported keys win).",
+            ),
+            h(
+                "div",
+                { className: "mc-keys", style: { marginTop: 10 } },
+                h(
+                    "button",
+                    {
+                        className: "mc-chip",
+                        onClick: () => void this.exportSettings(),
+                    },
+                    "Export settings",
+                ),
+                h(
+                    "button",
+                    {
+                        className: "mc-chip",
+                        disabled: this.state.importing,
+                        onClick: () => {
+                            const input = document.createElement("input");
+                            input.type = "file";
+                            input.accept = "application/json,.json";
+                            input.onchange = () => {
+                                const f = input.files?.[0];
+                                if (f) void this.importSettings(f);
+                            };
+                            input.click();
+                        },
+                    },
+                    this.state.importing ? "Importing…" : "Import settings",
+                ),
+            ),
+            this.state.dataMsg
+                ? h(
+                      "div",
+                      { className: "mc-desc", style: { minHeight: 0, opacity: 1, marginTop: 8 } },
+                      this.state.dataMsg,
+                  )
+                : null,
         ),
         );
     }

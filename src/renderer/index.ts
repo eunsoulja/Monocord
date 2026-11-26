@@ -24,6 +24,7 @@ import { registerUxExtras } from "../plugins/ux-extras";
 import { registerVencordLate } from "../plugins/vencord-late";
 import { registerVencordLast } from "../plugins/vencord-last";
 import { registerMore } from "../plugins/more";
+import { registerStore3 } from "../plugins/store3";
 import { SETTINGS_PLUGIN_NAME, SettingsUIPlugin } from "../plugins/settings-ui";
 
 const log = Logger.get("renderer");
@@ -134,6 +135,7 @@ async function main(): Promise<void> {
     registerVencordLate();
     registerVencordLast();
     registerMore();
+    registerStore3();
     try {
         Api.Plugins.register(CustomRPC);
     } catch (e) {

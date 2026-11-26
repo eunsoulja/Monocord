@@ -514,6 +514,66 @@ function timestampFormatPlugin(): Plugin {
     };
 }
 
+// ---------------------------------------------------------------------------
+// FakeDnd
+// ---------------------------------------------------------------------------
+
+function fakeDndPlugin(): Plugin {
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    const apply = () => {
+        try {
+            const status = Api.Settings.getSync<string>(
+                "plugins.settings.FakeDnd.status",
+                "dnd",
+            );
+            const dispatcher = findDispatcher();
+            if (!dispatcher?.dispatch) return;
+            dispatcher.dispatch({
+                type: "LOCAL_PRESENCE_UPDATE",
+                status,
+                selfMute: false,
+                selfDeaf: false,
+                selfVideo: false,
+            });
+        } catch (e) {
+            log.debug("presence dispatch failed", e);
+        }
+    };
+
+    return {
+        name: "FakeDnd",
+        description: "Force your status (DND/idle/invisible) via presence update.",
+        authors: ["Monocord"],
+        version: "0.1.0",
+        defer: true,
+        settings: { status: "dnd" },
+        settingsSchema: {
+            status: {
+                type: "select",
+                label: "Status",
+                options: [
+                    { value: "dnd", label: "Do Not Disturb" },
+                    { value: "idle", label: "Idle" },
+                    { value: "invisible", label: "Invisible" },
+                    { value: "online", label: "Online" },
+                ],
+            },
+        },
+
+        start() {
+            apply();
+            // Discord may overwrite presence on its own timers — re-assert.
+            timer = setInterval(apply, 30000);
+        },
+
+        stop() {
+            if (timer) clearInterval(timer);
+            timer = null;
+        },
+    };
+}
+
 /** Register store3 plugins. */
 export function registerStore3(): void {
     for (const plugin of [
@@ -522,6 +582,7 @@ export function registerStore3(): void {
         serverRegionPlugin(),
         memberLimitPlugin(),
         timestampFormatPlugin(),
+        fakeDndPlugin(),
     ]) {
         try {
             Api.Plugins.register(plugin);

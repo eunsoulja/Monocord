@@ -1110,6 +1110,26 @@ function registerIpc(): void {
         return true;
     });
 
+    // Fetch a remote stylesheet/text file for the renderer (theme-from-URL).
+    // Runs in the main process so Discord's page CSP can't block it.
+    ipcMain.handle("monocord:fetch-url", async (_e, url: unknown) => {
+        if (typeof url !== "string" || !/^https?:\/\//.test(url)) {
+            throw new Error("invalid url");
+        }
+        const netApi = (
+            electron as unknown as {
+                net: { fetch(u: string, o?: unknown): Promise<Response> };
+            }
+        ).net.fetch;
+        const res = await netApi(url, {
+            signal: AbortSignal.timeout(15000),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const text = await res.text();
+        if (text.length > 2_000_000) throw new Error("response too large");
+        return text;
+    });
+
     // Renderer logs arrive via ipcRenderer.invoke — must be `handle`, not
     // `on`, or the renderer's promise never resolves and logs vanish.
     ipcMain.handle(

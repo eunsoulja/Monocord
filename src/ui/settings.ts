@@ -1230,6 +1230,9 @@ interface ThemesState {
     presets: Record<string, string>;
     presetName: string;
     presetSel: string;
+    urlInput: string;
+    urlMsg: string;
+    urlBusy: boolean;
 }
 
 export class ThemesPanel extends PanelBase {
@@ -1244,6 +1247,9 @@ export class ThemesPanel extends PanelBase {
         presets: {},
         presetName: "",
         presetSel: "",
+        urlInput: "",
+        urlMsg: "",
+        urlBusy: false,
     };
     private offs: (() => void)[] = [];
     private wallpaperInput: HTMLInputElement | null = null;
@@ -1357,6 +1363,25 @@ export class ThemesPanel extends PanelBase {
         const presets = { ...this.state.presets };
         delete presets[name];
         void this.persistPresets(presets);
+    }
+
+    private async fetchCssFromUrl(): Promise<void> {
+        const url = this.state.urlInput.trim();
+        const b = (window as { monocord?: { invoke(c: string, ...a: unknown[]): Promise<unknown> } })
+            .monocord;
+        if (!url || !b) return;
+        this.setState({ urlBusy: true, urlMsg: "" });
+        try {
+            const css = (await b.invoke("fetch-url", url)) as string;
+            if (typeof css !== "string" || !css.trim()) throw new Error("empty response");
+            this.setState({ customCss: css, saved: false, urlMsg: `Fetched ${css.length} chars` });
+            await Themes.setCustomCss(css);
+            this.setState({ saved: true });
+        } catch (e) {
+            this.setState({ urlMsg: `Fetch failed: ${String(e)}` });
+        } finally {
+            this.setState({ urlBusy: false });
+        }
     }
 
     override render(): unknown {
@@ -1618,6 +1643,37 @@ export class ThemesPanel extends PanelBase {
                       )
                     : null,
             ),
+            h(
+                "div",
+                { className: "mc-keys", style: { marginTop: 10, alignItems: "center" } },
+                h("input", {
+                    style: { ...S.input, flex: 1, minWidth: 200, padding: "5px 10px" },
+                    placeholder: "https://…/theme.css",
+                    value: this.state.urlInput,
+                    onChange: (e: { target: { value: string } }) =>
+                        this.setState({ urlInput: e.target.value }),
+                    onKeyDown: (e: { key: string }) => {
+                        if (e.key === "Enter") void this.fetchCssFromUrl();
+                    },
+                }),
+                h(
+                    "button",
+                    {
+                        className: "mc-chip",
+                        disabled: this.state.urlBusy,
+                        title: "Download a remote CSS file and load it as custom CSS",
+                        onClick: () => void this.fetchCssFromUrl(),
+                    },
+                    this.state.urlBusy ? "Fetching…" : "Fetch CSS",
+                ),
+            ),
+            this.state.urlMsg
+                ? h(
+                      "div",
+                      { className: "mc-desc", style: { minHeight: 0, marginTop: 6 } },
+                      this.state.urlMsg,
+                  )
+                : null,
         ),
         );
     }

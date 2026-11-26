@@ -8,7 +8,7 @@ import { Api } from "../core/api";
 import { Logger } from "../core/logger";
 import type { Plugin } from "../core/types";
 import { cssPlugin } from "./extras";
-import { el, observeAdded, onDomReady, toast } from "./dom-utils";
+import { contextMenu, el, observeAdded, onDomReady, toast } from "./dom-utils";
 import { findStoreByName } from "./mods";
 
 const log = Logger.get("more");
@@ -1229,6 +1229,85 @@ function chatInputDraftsPlugin(): Plugin {
     };
 }
 
+/**
+ * EmojiStealer — right-click a custom emoji (chat, picker, anywhere) to
+ * download the original file or copy its CDN URL.
+ */
+function emojiStealerPlugin(): Plugin {
+    let off: (() => void) | null = null;
+
+    const emojiImg = (t: EventTarget | null): HTMLImageElement | null => {
+        if (!(t instanceof Element)) return null;
+        const img = t instanceof HTMLImageElement ? t : t.querySelector("img");
+        if (!img) return null;
+        const src = img.currentSrc || img.src;
+        return /\/emojis\/\d+\.[a-z0-9]+/i.test(src) ? img : null;
+    };
+
+    const onContext = (ev: MouseEvent) => {
+        const img = emojiImg(ev.target);
+        if (!img) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const src = img.currentSrc || img.src;
+        const m = src.match(/\/emojis\/(\d+)\.([a-z0-9]+)/i);
+        const id = m?.[1];
+        const ext = m?.[2]?.toLowerCase();
+        const filename = id && ext ? `emoji-${id}.${ext}` : "emoji";
+        const bridge = (
+            window as {
+                monocord?: {
+                    invoke(c: string, ...a: unknown[]): Promise<unknown>;
+                };
+            }
+        ).monocord;
+        contextMenu(ev.clientX, ev.clientY, [
+            {
+                label: "Download emoji",
+                action: () => {
+                    if (!bridge) return toast("Monocord bridge unavailable");
+                    toast("Saving emoji…");
+                    void bridge
+                        .invoke("download-url", { url: src, filename })
+                        .then((r) =>
+                            toast(
+                                typeof r === "string" ? `Saved: ${r}` : "Download cancelled",
+                            ),
+                        )
+                        .catch((e) => toast(`Download failed: ${String(e)}`));
+                },
+            },
+            {
+                label: "Copy image URL",
+                action: () => {
+                    void navigator.clipboard?.writeText(src).then(
+                        () => toast("URL copied"),
+                        () => toast("Copy failed"),
+                    );
+                },
+            },
+        ]);
+    };
+
+    return {
+        name: "EmojiStealer",
+        description: "Right-click custom emoji to download the file or copy its URL.",
+        authors: ["Monocord"],
+        version: "0.1.0",
+        defer: true,
+
+        start() {
+            document.addEventListener("contextmenu", onContext, true);
+            off = () => document.removeEventListener("contextmenu", onContext, true);
+        },
+
+        stop() {
+            off?.();
+            off = null;
+        },
+    };
+}
+
 /** Register all "more" plugins. */
 export function registerMore(): void {
     for (const plugin of [
@@ -1286,6 +1365,7 @@ export function registerMore(): void {
         memberListSortPlugin(),
         noGifAutoplayPlugin(),
         chatInputDraftsPlugin(),
+        emojiStealerPlugin(),
     ]) {
         try {
             Api.Plugins.register(plugin);

@@ -1038,6 +1038,60 @@ function serverListAlphabeticalPlugin(): Plugin {
     };
 }
 
+/**
+ * MemberListSort — alphabetically sorts members inside each member-list
+ * group container. Skips containers that have role/group headers so
+ * Discord's grouping stays intact.
+ */
+function memberListSortPlugin(): Plugin {
+    let sorting = false;
+    const sortContainer = (container: Element) => {
+        if (sorting) return;
+        if (container.querySelector('[class*="roleName"], [class*="groupHeader"], [class*="role"]')) {
+            return;
+        }
+        const items = Array.from(container.children).filter(
+            (c) => c instanceof HTMLElement && c.matches('[class*="member"], [role="listitem"]'),
+        );
+        if (items.length < 2) return;
+        const keyed = items.map((el) => ({
+            el,
+            key: (el.getAttribute("aria-label") ?? el.textContent ?? "").toLowerCase(),
+        }));
+        keyed.sort((a, b) => a.key.localeCompare(b.key));
+        if (keyed.every((k, i) => k.el === items[i])) return;
+        sorting = true;
+        try {
+            for (const { el } of keyed) container.append(el);
+        } finally {
+            sorting = false;
+        }
+    };
+    let stop: (() => void) | null = null;
+    return {
+        name: "MemberListSort",
+        description: "Sort members alphabetically within member-list groups.",
+        authors: ["Monocord"],
+        version: "0.1.0",
+        defer: true,
+
+        start() {
+            stop = observeAdded(
+                '[class*="members"] [class*="item"], [class*="memberList"] [class*="member"], [class*="members"] [role="listitem"]',
+                (node) => {
+                    const container = node.parentElement;
+                    if (container) sortContainer(container);
+                },
+            );
+        },
+
+        stop() {
+            stop?.();
+            stop = null;
+        },
+    };
+}
+
 /** Register all "more" plugins. */
 export function registerMore(): void {
     for (const plugin of [
@@ -1092,6 +1146,7 @@ export function registerMore(): void {
         copyCurrentIdsPlugin(),
         copyMsgLinkPlugin(),
         serverListAlphabeticalPlugin(),
+        memberListSortPlugin(),
     ]) {
         try {
             Api.Plugins.register(plugin);

@@ -1227,6 +1227,9 @@ interface ThemesState {
     saved: boolean;
     wallpaper: string | null;
     wallpaperBusy: boolean;
+    presets: Record<string, string>;
+    presetName: string;
+    presetSel: string;
 }
 
 export class ThemesPanel extends PanelBase {
@@ -1238,6 +1241,9 @@ export class ThemesPanel extends PanelBase {
         saved: false,
         wallpaper: Themes.wallpaperUrl,
         wallpaperBusy: false,
+        presets: {},
+        presetName: "",
+        presetSel: "",
     };
     private offs: (() => void)[] = [];
     private wallpaperInput: HTMLInputElement | null = null;
@@ -1247,6 +1253,9 @@ export class ThemesPanel extends PanelBase {
         void Themes.list().then((themes) => this.setState({ themes }));
         void Settings.get<string>("theme.customCss", "").then((v) =>
             this.setState({ customCss: v ?? "" }),
+        );
+        void Settings.get<Record<string, string>>("theme.cssPresets", {}).then((v) =>
+            this.setState({ presets: v ?? {} }),
         );
         void Themes.refreshWallpaper().then(() =>
             this.setState({ wallpaper: Themes.wallpaperUrl }),
@@ -1322,6 +1331,32 @@ export class ThemesPanel extends PanelBase {
             },
             h("span", null),
         );
+    }
+
+    private async persistPresets(presets: Record<string, string>): Promise<void> {
+        this.setState({ presets });
+        await Settings.set("theme.cssPresets", presets).catch(() => {});
+    }
+
+    private savePreset(): void {
+        const name = this.state.presetName.trim();
+        if (!name) return;
+        const presets = { ...this.state.presets, [name]: this.state.customCss };
+        void this.persistPresets(presets);
+        this.setState({ presetName: "" });
+    }
+
+    private applyPreset(name: string): void {
+        const css = this.state.presets[name];
+        if (css === undefined) return;
+        this.setState({ customCss: css, saved: false });
+        void Themes.setCustomCss(css).then(() => this.setState({ saved: true }));
+    }
+
+    private deletePreset(name: string): void {
+        const presets = { ...this.state.presets };
+        delete presets[name];
+        void this.persistPresets(presets);
     }
 
     override render(): unknown {
@@ -1530,6 +1565,58 @@ export class ThemesPanel extends PanelBase {
                 "div",
                 { className: "mc-desc", style: { minHeight: 0, marginTop: 6 } },
                 `${customCss.split("\n").length} lines · ${customCss.length} chars · saved instantly on Save`,
+            ),
+            h(
+                "div",
+                { className: "mc-keys", style: { marginTop: 10, alignItems: "center" } },
+                h("input", {
+                    style: { ...S.input, width: 140, padding: "5px 10px" },
+                    placeholder: "Preset name",
+                    value: this.state.presetName,
+                    onChange: (e: { target: { value: string } }) =>
+                        this.setState({ presetName: e.target.value }),
+                }),
+                h(
+                    "button",
+                    {
+                        className: "mc-chip",
+                        title: "Save the current CSS as a named preset",
+                        onClick: () => this.savePreset(),
+                    },
+                    "Save preset",
+                ),
+                Object.keys(this.state.presets).length > 0
+                    ? h(
+                          "select",
+                          {
+                              style: { ...S.input, width: "auto", padding: "5px 10px" },
+                              value: this.state.presetSel,
+                              onChange: (e: { target: { value: string } }) => {
+                                  this.setState({ presetSel: e.target.value });
+                                  if (e.target.value) this.applyPreset(e.target.value);
+                              },
+                          },
+                          h("option", { value: "" }, "Load preset…"),
+                          Object.keys(this.state.presets).map((name) =>
+                              h("option", { key: name, value: name }, name),
+                          ),
+                      )
+                    : null,
+                Object.keys(this.state.presets).length > 0
+                    ? h(
+                          "button",
+                          {
+                              className: "mc-chip",
+                              title: "Delete the selected preset",
+                              onClick: () => {
+                                  const name = this.state.presetSel;
+                                  if (name) this.deletePreset(name);
+                                  this.setState({ presetSel: "" });
+                              },
+                          },
+                          "Delete preset",
+                      )
+                    : null,
             ),
         ),
         );

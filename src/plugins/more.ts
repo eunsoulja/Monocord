@@ -527,6 +527,19 @@ const BiggerServerList = cssPlugin(
     `,
 );
 
+const NoNitroBadge = cssPlugin(
+    "NoNitroBadge",
+    "Hide remaining Nitro badges and promo surfaces.",
+    `
+    /* NoNitroBadge */
+    [class*="badge"][class*="nitro"],
+    [class*="premium"],
+    [class*="nitroBadge"] {
+        display: none !important;
+    }
+    `,
+);
+
 // ---------------------------------------------------------------------------
 // Functional plugins
 // ---------------------------------------------------------------------------
@@ -1044,6 +1057,7 @@ export function registerMore(): void {
         NoEmbedFooter,
         HugeAvatars,
         BiggerServerList,
+        NoNitroBadge,
         copyIdsPlugin(),
         friendsOnlinePlugin(),
         serverBoostsPlugin(),

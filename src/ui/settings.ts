@@ -658,6 +658,21 @@ export class PluginsPanel extends PanelBase {
         void p.catch((e) => log.error(`toggle ${name} failed`, e));
     }
 
+    private resetSettings(name: string, plugin: Plugin): void {
+        void Settings.delete(`plugins.settings.${name}`)
+            .catch((e) => log.error(`reset settings ${name} failed`, e))
+            .then(() => {
+                const values = { ...this.state.values };
+                const drafts = { ...this.state.drafts };
+                const errors = { ...this.state.errors };
+                delete values[name];
+                delete drafts[name];
+                delete errors[name];
+                this.setState({ values, drafts, errors });
+                void this.loadDraft(name, plugin);
+            });
+    }
+
     private async toggleAll(enable: boolean): Promise<void> {
         for (const name of Api.Plugins.names()) {
             if (name === "MonocordSettings") continue;
@@ -865,8 +880,24 @@ export class PluginsPanel extends PanelBase {
                       { className: "mc-card", style: { marginTop: 12 } },
                       h(
                           "div",
-                          { className: "mc-name", style: { fontSize: 14 } },
-                          "Settings",
+                          {
+                              className: "mc-head",
+                              style: { marginBottom: 8 },
+                          },
+                          h(
+                              "div",
+                              { className: "mc-name", style: { fontSize: 14 } },
+                              "Settings",
+                          ),
+                          h(
+                              "button",
+                              {
+                                  className: "mc-chip",
+                                  title: "Delete all saved settings for this plugin",
+                                  onClick: () => this.resetSettings(name, plugin),
+                              },
+                              "Reset",
+                          ),
                       ),
                       this.renderSettingsBody(name, plugin),
                   )
